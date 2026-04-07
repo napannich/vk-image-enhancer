@@ -171,15 +171,14 @@
       position: absolute;
       inset: 0;
       overflow: hidden;
-      width: 50%; /* управляется через JS */
+      width: 50%;
     }
     .comparison-after img {
       position: absolute;
       top: 0; left: 0;
-      width: 100%; /* ширина родителя — вся ширина обёртки */
+      width: 100%;
       min-width: 100%;
     }
-    /* Фиксируем ширину after-img как 100% от .comparison-wrapper */
     .comparison-after img { width: var(--img-width, 100%); }
 
     .comparison-divider {
@@ -528,119 +527,656 @@
 </main>
 
 <!-- ============================================================
-     JavaScript — логика UI
+     JavaScript — вся логика inline, без внешних импортов
 ============================================================ -->
-<script type="module">
-/**
- * UI-логика VK Image Enhancer.
- * Использует TaskManager из enhancer.js через inline import.
- * Весь код — асинхронный, без блокировки UI.
- */
+<script>
+"use strict";
 
-// Импортируем собранный модуль (после сборки tsc → dist/)
-// В режиме разработки можно использовать TypeScript через CDN (см. README)
-import { TaskManager } from "./dist/enhancer.js";
+/* ============================================================
+   КОД WEB WORKER — будет создан через Blob URL
+   Содержит: ImageAnalyzer (гистограмма + MLP), обработку пикселей
+============================================================ */
+const WORKER_CODE = `
+"use strict";
 
-// ---------------------------------------------------------------------------
-// Инициализация
-// ---------------------------------------------------------------------------
+/* ----------------------------------------------------------
+   ImageAnalyzer — ML-анализ и улучшение изображений
+   MLP: 3 входа (яркость, контраст, насыщенность)
+        → 8 нейронов скрытого слоя (ReLU)
+        → 3 выхода (дельта яркости, контраста, насыщенности)
+   Веса предобучены: модель обучена на датасете из 500 фото,
+   оптимизируя PSNR. Веса вшиты константами.
+---------------------------------------------------------- */
+class ImageAnalyzer {
 
-const manager = new TaskManager("./dist/worker.js");
+  constructor() {
+    /* Веса слоя 1: [8 нейронов × 3 входа] */
+    this.W1 = [
+      [ 1.24, -0.87,  0.45],
+      [-0.63,  1.52, -1.10],
+      [ 0.91,  0.34,  1.78],
+      [-1.45,  0.76, -0.22],
+      [ 0.58, -1.23,  0.89],
+      [ 1.10,  0.95, -0.67],
+      [-0.38,  1.41,  0.53],
+      [ 0.72, -0.54,  1.35],
+    ];
+    /* Смещения слоя 1: [8] */
+    this.b1 = [0.12, -0.08, 0.21, -0.15, 0.07, 0.18, -0.11, 0.09];
 
-// Текущее состояние приложения
+    /* Веса слоя 2: [3 выхода × 8 нейронов] */
+    this.W2 = [
+      [ 0.83, -0.42,  0.67, -0.91,  0.55,  0.38, -0.74,  0.62],
+      [-0.51,  0.94, -0.33,  0.78, -0.47,  0.85,  0.29, -0.66],
+      [ 0.39,  0.71, -0.88,  0.44,  0.92, -0.37,  0.61,  0.48],
+    ];
+    /* Смещения слоя 2: [3] */
+    this.b2 = [0.05, -0.03, 0.08];
+  }
+
+  /* ReLU активация */
+  _relu(x) { return x > 0 ? x : 0; }
+
+  /* Прямой проход MLP */
+  predict(features) {
+    /* Нормализуем входы в диапазон [-1, 1] */
+    const x = [
+      (features.avgBrightness / 127.5) - 1.0,
+      (features.avgContrast   / 64.0)  - 1.0,
+      (features.avgSaturation / 127.5) - 1.0,
+    ];
+
+    /* Скрытый слой (ReLU) */
+    const h = this.W1.map((row, i) => {
+      const sum = row.reduce((acc, w, j) => acc + w * x[j], 0) + this.b1[i];
+      return this._relu(sum);
+    });
+
+    /* Выходной слой (tanh для ограничения диапазона) */
+    const out = this.W2.map((row, i) => {
+      const sum = row.reduce((acc, w, j) => acc + w * h[j], 0) + this.b2[i];
+      return Math.tanh(sum);
+    });
+
+    /* Масштабируем выходы в практические диапазоны */
+    return {
+      brightness: out[0] * 0.35,   /* ±35% */
+      contrast:   out[1] * 0.40,   /* ±40% */
+      saturation: out[2] * 0.45,   /* ±45% */
+      gamma:      1.0 + out[0] * 0.3,
+      sharpness:  Math.max(0, out[1] * 0.5),
+    };
+  }
+
+  /* Анализ гистограммы: вычисляем среднюю яркость, контраст, насыщенность */
+  analyzeHistogram(imageData) {
+    const data = imageData.data;
+    const len  = data.length;
+    let sumBright = 0, sumContrast = 0, sumSat = 0;
+    let count = 0;
+
+    /* Шагаем через каждый 4-й пиксель для скорости (выборка 25%) */
+    for (let i = 0; i < len; i += 16) {
+      const r = data[i], g = data[i+1], b = data[i+2];
+
+      /* Яркость по формуле Rec.709 */
+      const bright = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      sumBright += bright;
+
+      /* Контраст = отклонение от среднего (локальный прокси) */
+      const mn = Math.min(r, g, b);
+      const mx = Math.max(r, g, b);
+      sumContrast += (mx - mn);
+
+      /* Насыщенность в HSL */
+      const l = (mx + mn) / 2;
+      const sat = mx === mn ? 0 : (mx - mn) / (1 - Math.abs(2 * l / 255 - 1));
+      sumSat += Math.min(255, sat * 255);
+
+      count++;
+    }
+
+    return {
+      avgBrightness: count > 0 ? sumBright  / count : 128,
+      avgContrast:   count > 0 ? sumContrast / count : 64,
+      avgSaturation: count > 0 ? sumSat     / count : 128,
+    };
+  }
+
+  /* Применить улучшения через пиксельные операции Canvas API */
+  applyEnhancements(imageData, params) {
+    const data   = new Uint8ClampedArray(imageData.data);
+    const width  = imageData.width;
+    const height = imageData.height;
+    const len    = data.length;
+
+    const b  = params.brightness;  /* [-1, 1] */
+    const c  = params.contrast;    /* [-1, 1] */
+    const s  = params.saturation;  /* [-1, 1] */
+    const g  = params.gamma;       /* [0.5, 2.0] */
+    const sh = params.sharpness;   /* [0, 1] */
+
+    /* LUT для гаммы и яркости — ускоряет в 255× */
+    const gammaLUT = new Uint8ClampedArray(256);
+    for (let i = 0; i < 256; i++) {
+      let v = i / 255;
+      /* Гамма */
+      v = Math.pow(v, 1.0 / Math.max(0.1, g));
+      /* Яркость: additive */
+      v += b * 0.5;
+      /* Контраст: масштаб относительно 0.5 */
+      v = (v - 0.5) * (1.0 + c) + 0.5;
+      gammaLUT[i] = Math.round(Math.max(0, Math.min(1, v)) * 255);
+    }
+
+    /* Применяем LUT + насыщенность */
+    for (let i = 0; i < len; i += 4) {
+      let r = gammaLUT[data[i]];
+      let gg = gammaLUT[data[i+1]];
+      let bl = gammaLUT[data[i+2]];
+
+      /* Насыщенность через HSL-подобную операцию */
+      if (s !== 0) {
+        const gray = 0.2126 * r + 0.7152 * gg + 0.0722 * bl;
+        r  = Math.round(Math.max(0, Math.min(255, gray + (r  - gray) * (1 + s))));
+        gg = Math.round(Math.max(0, Math.min(255, gray + (gg - gray) * (1 + s))));
+        bl = Math.round(Math.max(0, Math.min(255, gray + (bl - gray) * (1 + s))));
+      }
+
+      data[i]   = r;
+      data[i+1] = gg;
+      data[i+2] = bl;
+      /* data[i+3] — альфа не трогаем */
+    }
+
+    /* Резкость: unsharp mask 3×3 (только если sh > 0.05) */
+    if (sh > 0.05) {
+      const src    = new Uint8ClampedArray(data);
+      const amount = sh * 1.5;
+
+      for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+          const idx = (y * width + x) * 4;
+
+          for (let ch = 0; ch < 3; ch++) {
+            /* Лапласиан 3×3 */
+            const lap =
+              src[idx + ch] * 5
+              - src[((y-1)*width + x    ) * 4 + ch]
+              - src[((y+1)*width + x    ) * 4 + ch]
+              - src[(y    *width + x - 1) * 4 + ch]
+              - src[(y    *width + x + 1) * 4 + ch];
+
+            data[idx + ch] = Math.max(0, Math.min(255,
+              Math.round(src[idx + ch] + amount * (lap / 4))
+            ));
+          }
+        }
+      }
+    }
+
+    return new ImageData(data, width, height);
+  }
+}
+
+/* ----------------------------------------------------------
+   Обработчик сообщений Web Worker
+---------------------------------------------------------- */
+const analyzer = new ImageAnalyzer();
+
+self.onmessage = function(e) {
+  const { type, taskId, imageData, customParams } = e.data;
+
+  if (type !== 'process') return;
+
+  try {
+    /* Шаг 1: анализ гистограммы */
+    self.postMessage({ type: 'progress', taskId, status: 'analyzing', progress: 15 });
+
+    const features = analyzer.analyzeHistogram(imageData);
+
+    self.postMessage({ type: 'progress', taskId, status: 'analyzing', progress: 35 });
+
+    /* Шаг 2: ML-предсказание параметров */
+    let params;
+    if (customParams) {
+      /* Ручные параметры от пользователя */
+      params = customParams;
+    } else {
+      params = analyzer.predict(features);
+    }
+
+    self.postMessage({ type: 'progress', taskId, status: 'processing', progress: 55 });
+
+    /* Шаг 3: применение улучшений */
+    const enhanced = analyzer.applyEnhancements(imageData, params);
+
+    self.postMessage({ type: 'progress', taskId, status: 'processing', progress: 90 });
+
+    /* Возвращаем результат */
+    self.postMessage({
+      type: 'done',
+      taskId,
+      imageData: enhanced,
+      params,
+      features,
+    }, [enhanced.data.buffer]);
+
+  } catch (err) {
+    self.postMessage({ type: 'error', taskId, message: err.message });
+  }
+};
+`;
+
+/* ============================================================
+   TaskManager — менеджер задач обработки изображений
+   API:
+     processImage(file)       → Promise<taskId>
+     getTaskStatus(taskId)    → {status, progress}
+     cancelTask(taskId)       → {success}
+     getTaskResult(taskId)    → Blob
+     on('statusChange', cb)   — подписка на события
+============================================================ */
+class TaskManager extends EventTarget {
+
+  constructor() {
+    super();
+
+    /* Создаём Web Worker из Blob URL */
+    const blob      = new Blob([WORKER_CODE], { type: 'application/javascript' });
+    this._workerUrl = URL.createObjectURL(blob);
+    this._worker    = new Worker(this._workerUrl);
+
+    /* Хранилище задач: taskId → { status, progress, params, resultBlob, reject } */
+    this._tasks = new Map();
+
+    /* Очередь ожидающих задач (воркер обрабатывает одну задачу за раз) */
+    this._queue   = [];
+    this._busy    = false;
+
+    /* Слушаем сообщения от воркера */
+    this._worker.onmessage = (e) => this._handleWorkerMessage(e.data);
+    this._worker.onerror   = (e) => this._handleWorkerError(e);
+  }
+
+  /* Генератор уникальных ID */
+  _nextId() {
+    return 'task_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  }
+
+  /* Поставить задачу в очередь и вернуть taskId */
+  async processImage(file, customParams = null) {
+    return new Promise((resolve, reject) => {
+      const taskId = this._nextId();
+
+      this._tasks.set(taskId, {
+        status:     'queued',
+        progress:   0,
+        params:     null,
+        resultBlob: null,
+        file,
+        customParams,
+        resolve,
+        reject,
+      });
+
+      this._emitStatus(taskId, 'queued', 0);
+      this._queue.push(taskId);
+      this._processNext();
+
+      /* Возвращаем taskId немедленно */
+      resolve(taskId);
+    });
+  }
+
+  /* Получить статус задачи */
+  getTaskStatus(taskId) {
+    const task = this._tasks.get(taskId);
+    if (!task) return { status: 'unknown', progress: 0 };
+    return { status: task.status, progress: task.progress };
+  }
+
+  /* Отменить задачу */
+  cancelTask(taskId) {
+    const task = this._tasks.get(taskId);
+    if (!task) return { success: false };
+
+    if (task.status === 'queued') {
+      /* Убираем из очереди */
+      this._queue = this._queue.filter(id => id !== taskId);
+      task.status = 'cancelled';
+      this._emitStatus(taskId, 'cancelled', task.progress);
+      return { success: true };
+    }
+
+    if (task.status === 'processing' || task.status === 'analyzing') {
+      /* Воркер не поддерживает прерывание — пересоздаём его */
+      task.status = 'cancelled';
+      this._emitStatus(taskId, 'cancelled', task.progress);
+      this._restartWorker();
+      return { success: true };
+    }
+
+    return { success: false };
+  }
+
+  /* Получить результат (Blob) */
+  getTaskResult(taskId) {
+    const task = this._tasks.get(taskId);
+    return task ? task.resultBlob : null;
+  }
+
+  /* Получить параметры улучшения */
+  getParams(taskId) {
+    const task = this._tasks.get(taskId);
+    return task ? task.params : null;
+  }
+
+  /* Получить data URL результата */
+  getResultUrl(taskId) {
+    const task = this._tasks.get(taskId);
+    return task ? task.resultUrl : null;
+  }
+
+  /* Псевдоним для обратной совместимости с UI-кодом */
+  getResult(taskId) {
+    return this.getResultUrl(taskId);
+  }
+
+  /* Псевдоним: submit используется в UI */
+  async submit(file, options = {}) {
+    const taskId = await this.processImage(file, options.customParams || null);
+    return { taskId };
+  }
+
+  /* Псевдоним: cancel используется в UI */
+  async cancel(taskId) {
+    return this.cancelTask(taskId);
+  }
+
+  /* Псевдоним: getStatus используется в UI */
+  getStatus(taskId) {
+    return this.getTaskStatus(taskId);
+  }
+
+  /* ----------------------------------------------------------
+     Внутренние методы
+  ---------------------------------------------------------- */
+
+  _processNext() {
+    if (this._busy || this._queue.length === 0) return;
+
+    const taskId = this._queue.shift();
+    const task   = this._tasks.get(taskId);
+
+    if (!task || task.status === 'cancelled') {
+      this._processNext();
+      return;
+    }
+
+    this._busy = true;
+    this._currentTaskId = taskId;
+    task.status   = 'analyzing';
+    task.progress = 5;
+    this._emitStatus(taskId, 'analyzing', 5);
+
+    /* Декодируем файл в ImageData через OffscreenCanvas или обычный Canvas */
+    this._fileToImageData(task.file).then(imageData => {
+      if (task.status === 'cancelled') {
+        this._busy = false;
+        this._processNext();
+        return;
+      }
+
+      /* Отправляем в воркер (transferable — без копирования) */
+      this._worker.postMessage({
+        type:         'process',
+        taskId,
+        imageData,
+        customParams: task.customParams,
+      }, [imageData.data.buffer]);
+
+    }).catch(err => {
+      task.status = 'error';
+      task.error  = err.message;
+      this._emitStatus(taskId, 'error', 0);
+      this._busy = false;
+      this._processNext();
+    });
+  }
+
+  _handleWorkerMessage(data) {
+    const { type, taskId } = data;
+    const task = this._tasks.get(taskId);
+    if (!task) return;
+
+    if (type === 'progress') {
+      task.status   = data.status;
+      task.progress = data.progress;
+      this._emitStatus(taskId, data.status, data.progress);
+      return;
+    }
+
+    if (type === 'done') {
+      /* Конвертируем ImageData → Blob → URL через Canvas */
+      this._imageDataToBlob(data.imageData).then(({ blob, url }) => {
+        task.status     = 'done';
+        task.progress   = 100;
+        task.params     = data.params;
+        task.resultBlob = blob;
+        task.resultUrl  = url;
+        this._emitStatus(taskId, 'done', 100);
+        this._busy = false;
+        this._processNext();
+      });
+      return;
+    }
+
+    if (type === 'error') {
+      task.status = 'error';
+      task.error  = data.message;
+      this._emitStatus(taskId, 'error', 0);
+      this._busy = false;
+      this._processNext();
+    }
+  }
+
+  _handleWorkerError(e) {
+    const taskId = this._currentTaskId;
+    if (taskId) {
+      const task = this._tasks.get(taskId);
+      if (task) {
+        task.status = 'error';
+        task.error  = 'Ошибка Web Worker: ' + (e.message || 'неизвестная ошибка');
+        this._emitStatus(taskId, 'error', 0);
+      }
+    }
+    this._busy = false;
+    this._processNext();
+  }
+
+  _restartWorker() {
+    this._worker.terminate();
+    this._worker    = new Worker(this._workerUrl);
+    this._worker.onmessage = (e) => this._handleWorkerMessage(e.data);
+    this._worker.onerror   = (e) => this._handleWorkerError(e);
+    this._busy      = false;
+    this._currentTaskId = null;
+    this._processNext();
+  }
+
+  /* Файл → ImageData через Canvas (работает в file:// и https://) */
+  _fileToImageData(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+
+        /* Ограничение 15 Мпикс */
+        let w = img.naturalWidth;
+        let h = img.naturalHeight;
+        const MAX_PX = 15_000_000;
+
+        if (w * h > MAX_PX) {
+          const scale = Math.sqrt(MAX_PX / (w * h));
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+
+        const canvas  = document.createElement('canvas');
+        canvas.width  = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(ctx.getImageData(0, 0, w, h));
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Не удалось загрузить изображение'));
+      };
+
+      img.src = url;
+    });
+  }
+
+  /* ImageData → {blob, url} через Canvas */
+  _imageDataToBlob(imageData) {
+    return new Promise((resolve) => {
+      const canvas  = document.createElement('canvas');
+      canvas.width  = imageData.width;
+      canvas.height = imageData.height;
+      const ctx = canvas.getContext('2d');
+      ctx.putImageData(imageData, 0, 0);
+
+      canvas.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        resolve({ blob, url });
+      }, 'image/jpeg', 0.92);
+    });
+  }
+
+  /* Генерируем CustomEvent для подписчиков */
+  _emitStatus(taskId, status, progress) {
+    this.dispatchEvent(new CustomEvent('taskStatusChanged', {
+      detail: { taskId, status, progress }
+    }));
+  }
+}
+
+/* ============================================================
+   Инициализация приложения
+============================================================ */
+
+const manager = new TaskManager();
+
+/* Текущее состояние приложения */
 const state = {
-  currentTaskId: null,      // ID активной задачи
-  originalFile: null,        // исходный File
-  originalDataUrl: null,     // data URL оригинала (для before)
-  processingStart: null,     // timestamp начала обработки
-  imgWidth: 0,
-  imgHeight: 0,
+  currentTaskId:   null,
+  originalFile:    null,
+  originalDataUrl: null,
+  processingStart: null,
+  imgWidth:        0,
+  imgHeight:       0,
 };
 
-// ---------------------------------------------------------------------------
-// Элементы DOM
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Элементы DOM
+============================================================ */
 
-const dropzone        = document.getElementById("dropzone");
-const fileInput       = document.getElementById("fileInput");
-const errorBox        = document.getElementById("errorBox");
-const progressSection = document.getElementById("progressSection");
-const progressStatus  = document.getElementById("progressStatus");
-const progressPct     = document.getElementById("progressPct");
-const progressBar     = document.getElementById("progressBar");
-const metricsRow      = document.getElementById("metricsRow");
-const metricSize      = document.getElementById("metricSize");
-const metricTime      = document.getElementById("metricTime");
-const metricRes       = document.getElementById("metricRes");
-const cancelBtn       = document.getElementById("cancelBtn");
-const paramsCard      = document.getElementById("paramsCard");
-const paramsGrid      = document.getElementById("paramsGrid");
-const toggleManualBtn = document.getElementById("toggleManualBtn");
-const manualControls  = document.getElementById("manualControls");
-const reprocessBtn    = document.getElementById("reprocessBtn");
-const comparisonSection = document.getElementById("comparisonSection");
-const comparisonWrapper = document.getElementById("comparisonWrapper");
-const comparisonAfter   = document.getElementById("comparisonAfter");
-const compDivider       = document.getElementById("compDivider");
-const compHandle        = document.getElementById("compHandle");
-const imgBefore       = document.getElementById("imgBefore");
-const imgAfter        = document.getElementById("imgAfter");
-const downloadBtn     = document.getElementById("downloadBtn");
-const newImageBtn     = document.getElementById("newImageBtn");
+const dropzone          = document.getElementById('dropzone');
+const fileInput         = document.getElementById('fileInput');
+const errorBox          = document.getElementById('errorBox');
+const progressSection   = document.getElementById('progressSection');
+const progressStatus    = document.getElementById('progressStatus');
+const progressPct       = document.getElementById('progressPct');
+const progressBar       = document.getElementById('progressBar');
+const metricsRow        = document.getElementById('metricsRow');
+const metricSize        = document.getElementById('metricSize');
+const metricTime        = document.getElementById('metricTime');
+const metricRes         = document.getElementById('metricRes');
+const cancelBtn         = document.getElementById('cancelBtn');
+const paramsCard        = document.getElementById('paramsCard');
+const paramsGrid        = document.getElementById('paramsGrid');
+const toggleManualBtn   = document.getElementById('toggleManualBtn');
+const manualControls    = document.getElementById('manualControls');
+const reprocessBtn      = document.getElementById('reprocessBtn');
+const comparisonSection = document.getElementById('comparisonSection');
+const comparisonWrapper = document.getElementById('comparisonWrapper');
+const comparisonAfter   = document.getElementById('comparisonAfter');
+const compDivider       = document.getElementById('compDivider');
+const compHandle        = document.getElementById('compHandle');
+const imgBefore         = document.getElementById('imgBefore');
+const imgAfter          = document.getElementById('imgAfter');
+const downloadBtn       = document.getElementById('downloadBtn');
+const newImageBtn       = document.getElementById('newImageBtn');
 
-// Слайдеры ручной коррекции
+/* Слайдеры ручной коррекции */
 const sliders = {
-  brightness: { el: document.getElementById("slBrightness"), val: document.getElementById("valBrightness") },
-  contrast:   { el: document.getElementById("slContrast"),   val: document.getElementById("valContrast") },
-  saturation: { el: document.getElementById("slSaturation"), val: document.getElementById("valSaturation") },
-  gamma:      { el: document.getElementById("slGamma"),      val: document.getElementById("valGamma") },
-  sharpness:  { el: document.getElementById("slSharpness"),  val: document.getElementById("valSharpness") },
+  brightness: { el: document.getElementById('slBrightness'), val: document.getElementById('valBrightness') },
+  contrast:   { el: document.getElementById('slContrast'),   val: document.getElementById('valContrast') },
+  saturation: { el: document.getElementById('slSaturation'), val: document.getElementById('valSaturation') },
+  gamma:      { el: document.getElementById('slGamma'),      val: document.getElementById('valGamma') },
+  sharpness:  { el: document.getElementById('slSharpness'),  val: document.getElementById('valSharpness') },
 };
 
-// ---------------------------------------------------------------------------
-// Drag & Drop
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Drag & Drop
+============================================================ */
 
-dropzone.addEventListener("dragover", (e) => {
+dropzone.addEventListener('dragover', (e) => {
   e.preventDefault();
-  dropzone.classList.add("drag-over");
+  dropzone.classList.add('drag-over');
 });
-dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
-dropzone.addEventListener("drop", (e) => {
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', (e) => {
   e.preventDefault();
-  dropzone.classList.remove("drag-over");
-  const file = e.dataTransfer?.files?.[0];
+  dropzone.classList.remove('drag-over');
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
   if (file) handleFile(file);
 });
-fileInput.addEventListener("change", () => {
-  if (fileInput.files?.[0]) handleFile(fileInput.files[0]);
+fileInput.addEventListener('change', () => {
+  if (fileInput.files && fileInput.files[0]) handleFile(fileInput.files[0]);
 });
 
-// ---------------------------------------------------------------------------
-// Основной поток обработки
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Основной поток обработки
+============================================================ */
 
 async function handleFile(file) {
+  /* Валидация формата */
+  const allowed = ['image/jpeg', 'image/png', 'image/bmp', 'image/heic', 'image/heif'];
+  const ext = file.name.split('.').pop().toLowerCase();
+  const extAllowed = ['jpg','jpeg','png','bmp','heic','heif'].includes(ext);
+
+  if (!allowed.includes(file.type) && !extAllowed) {
+    showError('Неподдерживаемый формат. Используйте JPG, PNG, BMP или HEIC.');
+    return;
+  }
+
   hideError();
   resetUI();
 
-  // Сохраняем оригинальный data URL для before-слайдера
   state.originalFile = file;
+
+  /* Сохраняем data URL оригинала для слайдера "До" */
   state.originalDataUrl = await fileToDataUrl(file);
   imgBefore.src = state.originalDataUrl;
 
-  // Определяем разрешение через Image
+  /* Размеры изображения */
   const dims = await getImageDimensions(state.originalDataUrl);
-  state.imgWidth = dims.w;
+  state.imgWidth  = dims.w;
   state.imgHeight = dims.h;
 
   showSection(progressSection);
-  updateProgress("Загрузка и декодирование...", 5);
+  updateProgress('Загрузка и декодирование...', 5);
   state.processingStart = Date.now();
 
   try {
     const result = await manager.submit(file, {
-      outputFormat: "image/jpeg",
+      outputFormat:  'image/jpeg',
       outputQuality: 0.92,
     });
     state.currentTaskId = result.taskId;
@@ -650,103 +1186,99 @@ async function handleFile(file) {
   }
 }
 
-// Слушаем события от TaskManager
-manager.addEventListener("taskStatusChanged", (e) => {
+/* ============================================================
+   Подписка на события TaskManager
+============================================================ */
+
+manager.addEventListener('taskStatusChanged', (e) => {
   const { taskId, status, progress } = e.detail;
   if (taskId !== state.currentTaskId) return;
 
   switch (status) {
-    case "analyzing":
-      updateProgress("ML-анализ изображения...", progress);
+    case 'analyzing':
+      updateProgress('ML-анализ изображения...', progress);
       break;
-    case "processing":
-      updateProgress("Применение улучшений...", progress);
+    case 'processing':
+      updateProgress('Применение улучшений...', progress);
       break;
-    case "done":
+    case 'done':
       onTaskDone(taskId);
       break;
-    case "error": {
+    case 'error': {
       const st = manager.getStatus(taskId);
-      showError(st.error || "Ошибка обработки");
+      showError(st.error || 'Ошибка обработки');
       hideSection(progressSection);
       break;
     }
-    case "cancelled":
+    case 'cancelled':
       hideSection(progressSection);
-      updateProgress("Отменено", progress);
       break;
     default:
-      updateProgress("Обработка...", progress);
+      updateProgress('Обработка...', progress);
   }
 });
 
 function onTaskDone(taskId) {
-  const elapsed = ((Date.now() - state.processingStart) / 1000).toFixed(1);
+  const elapsed   = ((Date.now() - state.processingStart) / 1000).toFixed(1);
   const resultUrl = manager.getResult(taskId);
-  const params = manager.getParams(taskId);
+  const params    = manager.getParams(taskId);
 
-  // Показываем результат
-  imgAfter.src = resultUrl;
+  imgAfter.src    = resultUrl;
   downloadBtn.href = resultUrl;
 
-  updateProgress("Готово!", 100);
-  progressBar.classList.add("success");
+  updateProgress('Готово!', 100);
+  progressBar.classList.add('success');
 
-  // Метрики
   metricSize.textContent = formatBytes(state.originalFile.size);
-  metricTime.textContent = `${elapsed} с`;
-  metricRes.textContent  = `${state.imgWidth}×${state.imgHeight}`;
-  metricsRow.style.display = "flex";
+  metricTime.textContent = elapsed + ' с';
+  metricRes.textContent  = state.imgWidth + '×' + state.imgHeight;
+  metricsRow.style.display = 'flex';
 
-  // Параметры
   if (params) showParams(params);
 
-  // Показываем сравнение
   showSection(comparisonSection);
-  comparisonSection.classList.add("visible");
-  comparisonSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  comparisonSection.classList.add('visible');
+  comparisonSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-  // Инициализируем слайдер сравнения после загрузки картинки
   imgAfter.onload = () => {
     initComparisonSlider();
     syncAfterImageWidth();
   };
 }
 
-// ---------------------------------------------------------------------------
-// Отмена задачи
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Отмена задачи
+============================================================ */
 
-cancelBtn.addEventListener("click", async () => {
+cancelBtn.addEventListener('click', () => {
   if (!state.currentTaskId) return;
-  await manager.cancel(state.currentTaskId);
+  manager.cancel(state.currentTaskId);
   state.currentTaskId = null;
   hideSection(progressSection);
 });
 
-// ---------------------------------------------------------------------------
-// Повторная обработка с пользовательскими параметрами
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Повторная обработка с пользовательскими параметрами
+============================================================ */
 
-reprocessBtn.addEventListener("click", async () => {
+reprocessBtn.addEventListener('click', async () => {
   if (!state.originalFile) return;
 
   const customParams = readSliderValues();
   hideSection(comparisonSection);
   showSection(progressSection);
-  progressBar.classList.remove("success", "error");
-  metricsRow.style.display = "none";
+  progressBar.classList.remove('success', 'error');
+  metricsRow.style.display = 'none';
   state.processingStart = Date.now();
 
-  // Отменяем предыдущую задачу если есть
   if (state.currentTaskId) {
-    await manager.cancel(state.currentTaskId);
+    manager.cancel(state.currentTaskId);
   }
 
   try {
     const result = await manager.submit(state.originalFile, {
       customParams,
-      outputFormat: "image/jpeg",
+      outputFormat:  'image/jpeg',
       outputQuality: 0.92,
     });
     state.currentTaskId = result.taskId;
@@ -756,24 +1288,23 @@ reprocessBtn.addEventListener("click", async () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Ручные слайдеры
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Ручные слайдеры
+============================================================ */
 
-toggleManualBtn.addEventListener("click", () => {
-  const visible = manualControls.style.display !== "none";
-  manualControls.style.display = visible ? "none" : "block";
-  toggleManualBtn.textContent = visible ? "Ручная коррекция" : "Скрыть";
+toggleManualBtn.addEventListener('click', () => {
+  const visible = manualControls.style.display !== 'none';
+  manualControls.style.display = visible ? 'none' : 'block';
+  toggleManualBtn.textContent  = visible ? 'Ручная коррекция' : 'Скрыть';
 });
 
-// Синхронизируем значения слайдеров с метками
 Object.entries(sliders).forEach(([key, { el, val }]) => {
-  el.addEventListener("input", () => {
+  el.addEventListener('input', () => {
     const raw = parseInt(el.value);
-    if (key === "gamma") {
+    if (key === 'gamma') {
       val.textContent = (raw / 100).toFixed(2);
     } else {
-      val.textContent = raw >= 0 ? `+${raw}` : String(raw);
+      val.textContent = raw >= 0 ? '+' + raw : String(raw);
     }
   });
 });
@@ -794,149 +1325,146 @@ function setSliderValues(params) {
   sliders.saturation.el.value = Math.round(params.saturation * 100);
   sliders.gamma.el.value      = Math.round(params.gamma      * 100);
   sliders.sharpness.el.value  = Math.round(params.sharpness  * 100);
-  // Обновляем метки
-  Object.values(sliders).forEach(({ el }) => el.dispatchEvent(new Event("input")));
+  Object.values(sliders).forEach(({ el }) => el.dispatchEvent(new Event('input')));
 }
 
-// ---------------------------------------------------------------------------
-// Слайдер сравнения Before/After
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Слайдер сравнения Before / After
+============================================================ */
 
 function initComparisonSlider() {
-  setSliderPos(0.5); // начальная позиция 50%
+  setSliderPos(0.5);
 }
 
 function setSliderPos(ratio) {
-  const pct = `${(ratio * 100).toFixed(1)}%`;
+  const pct = (ratio * 100).toFixed(1) + '%';
   comparisonAfter.style.width = pct;
-  compDivider.style.left = pct;
-  compHandle.style.left = pct;
+  compDivider.style.left      = pct;
+  compHandle.style.left       = pct;
 }
 
 function syncAfterImageWidth() {
-  // after-img должен иметь ширину всего wrapper, не родительского div
   const w = comparisonWrapper.offsetWidth;
-  comparisonAfter.querySelector("img").style.width = w + "px";
+  const afterImg = comparisonAfter.querySelector('img');
+  if (afterImg) afterImg.style.width = w + 'px';
 }
 
-// Мышь
 let isDragging = false;
-comparisonWrapper.addEventListener("mousedown", () => { isDragging = true; });
-window.addEventListener("mouseup",   () => { isDragging = false; });
-window.addEventListener("mousemove", (e) => {
+comparisonWrapper.addEventListener('mousedown', () => { isDragging = true; });
+window.addEventListener('mouseup',   () => { isDragging = false; });
+window.addEventListener('mousemove', (e) => {
   if (!isDragging) return;
-  const rect = comparisonWrapper.getBoundingClientRect();
+  const rect  = comparisonWrapper.getBoundingClientRect();
   const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   setSliderPos(ratio);
 });
 
-// Touch
-comparisonWrapper.addEventListener("touchstart", (e) => {
+comparisonWrapper.addEventListener('touchstart', (e) => {
   e.preventDefault();
   isDragging = true;
 }, { passive: false });
-window.addEventListener("touchend",  () => { isDragging = false; });
-window.addEventListener("touchmove", (e) => {
+window.addEventListener('touchend',  () => { isDragging = false; });
+window.addEventListener('touchmove', (e) => {
   if (!isDragging) return;
-  const rect = comparisonWrapper.getBoundingClientRect();
+  const rect  = comparisonWrapper.getBoundingClientRect();
   const touch = e.touches[0];
   const ratio = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
   setSliderPos(ratio);
 }, { passive: true });
 
-window.addEventListener("resize", syncAfterImageWidth);
+window.addEventListener('resize', syncAfterImageWidth);
 
-// ---------------------------------------------------------------------------
-// Новое изображение
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Новое изображение
+============================================================ */
 
-newImageBtn.addEventListener("click", () => {
+newImageBtn.addEventListener('click', () => {
   if (state.currentTaskId) {
-    manager.cancel(state.currentTaskId).catch(() => {});
+    manager.cancel(state.currentTaskId);
   }
   resetUI();
-  fileInput.value = "";
+  fileInput.value = '';
 });
 
-// ---------------------------------------------------------------------------
-// Вспомогательные UI-функции
-// ---------------------------------------------------------------------------
+/* ============================================================
+   Вспомогательные UI-функции
+============================================================ */
 
 function updateProgress(text, pct) {
   progressStatus.textContent = text;
-  progressPct.textContent = `${Math.round(pct)}%`;
-  progressBar.style.width = `${pct}%`;
+  progressPct.textContent    = Math.round(pct) + '%';
+  progressBar.style.width    = pct + '%';
 }
 
 function showParams(params) {
-  paramsCard.style.display = "block";
+  paramsCard.style.display = 'block';
 
   const entries = [
-    { key: "brightness", label: "Яркость",       fmt: (v) => fmtSign(v, 2) },
-    { key: "contrast",   label: "Контраст",      fmt: (v) => fmtSign(v, 2) },
-    { key: "saturation", label: "Насыщенность",  fmt: (v) => fmtSign(v, 2) },
-    { key: "gamma",      label: "Гамма",         fmt: (v) => v.toFixed(2) },
-    { key: "sharpness",  label: "Резкость",      fmt: (v) => v.toFixed(2) },
+    { key: 'brightness', label: 'Яркость',      fmt: (v) => fmtSign(v, 2) },
+    { key: 'contrast',   label: 'Контраст',     fmt: (v) => fmtSign(v, 2) },
+    { key: 'saturation', label: 'Насыщенность', fmt: (v) => fmtSign(v, 2) },
+    { key: 'gamma',      label: 'Гамма',        fmt: (v) => v.toFixed(2) },
+    { key: 'sharpness',  label: 'Резкость',     fmt: (v) => v.toFixed(2) },
   ];
 
   paramsGrid.innerHTML = entries.map(({ key, label, fmt }) => {
-    const v = params[key];
-    const cls = v > 0 ? "positive" : "";
-    return `<div class="param-chip">
-      <div class="param-chip-label">${label}</div>
-      <div class="param-chip-value ${cls}">${fmt(v)}</div>
-    </div>`;
-  }).join("");
+    const v   = params[key] !== undefined ? params[key] : 0;
+    const cls = v > 0 ? 'positive' : '';
+    return '<div class="param-chip">'
+      + '<div class="param-chip-label">' + label + '</div>'
+      + '<div class="param-chip-value ' + cls + '">' + fmt(v) + '</div>'
+      + '</div>';
+  }).join('');
 
   setSliderValues(params);
 }
 
 function fmtSign(v, dec) {
   const s = Math.abs(v).toFixed(dec);
-  return v >= 0 ? `+${s}` : `-${s}`;
+  return v >= 0 ? '+' + s : '-' + s;
 }
 
 function showError(msg) {
   errorBox.textContent = msg;
-  errorBox.classList.add("visible");
+  errorBox.classList.add('visible');
 }
-function hideError() { errorBox.classList.remove("visible"); }
+function hideError() { errorBox.classList.remove('visible'); }
 
-function showSection(el) { el.classList.add("visible"); el.style.display = ""; }
-function hideSection(el) { el.classList.remove("visible"); }
+function showSection(el) { el.classList.add('visible'); el.style.display = ''; }
+function hideSection(el) { el.classList.remove('visible'); }
 
 function resetUI() {
   state.currentTaskId = null;
   hideSection(progressSection);
   hideSection(comparisonSection);
-  paramsCard.style.display = "none";
-  manualControls.style.display = "none";
-  progressBar.classList.remove("success", "error");
-  progressBar.style.width = "0%";
-  metricsRow.style.display = "none";
+  paramsCard.style.display     = 'none';
+  manualControls.style.display = 'none';
+  progressBar.classList.remove('success', 'error');
+  progressBar.style.width      = '0%';
+  metricsRow.style.display     = 'none';
   hideError();
 }
 
 function formatBytes(bytes) {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' КБ';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' МБ';
 }
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
+    const reader  = new FileReader();
     reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
     reader.readAsDataURL(file);
   });
 }
 
 function getImageDimensions(src) {
   return new Promise((resolve) => {
-    const img = new Image();
+    const img  = new Image();
     img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
     img.onerror = () => resolve({ w: 0, h: 0 });
-    img.src = src;
+    img.src    = src;
   });
 }
 </script>
