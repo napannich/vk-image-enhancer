@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VK Image Enhancer — ML улучшение изображений</title>
+  <meta name="description" content="Улучшение изображений в браузере с помощью ML: яркость, контрастность, цветность" />
+  <style>
+    /* ============================================================
+       Переменные + сброс стилей
+    ============================================================ */
+    :root {
+      --vk-blue: #0077ff;
+      --vk-blue-dark: #0060cc;
+      --vk-blue-light: #e8f0fe;
+      --vk-bg: #f2f3f5;
+      --vk-card: #ffffff;
+      --vk-text: #000000;
+      --vk-text-secondary: #818c99;
+      --vk-border: #dce1e7;
+      --vk-success: #4bb34b;
+      --vk-error: #e64646;
+      --vk-radius: 12px;
+      --vk-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      --transition: 0.2s ease;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--vk-bg);
+      color: var(--vk-text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    /* ============================================================
+       Шапка
+    ============================================================ */
+    .header {
+      background: var(--vk-card);
+      border-bottom: 1px solid var(--vk-border);
+      padding: 0 20px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-inner {
+      max-width: 960px;
+      margin: 0 auto;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .header-logo {
+      width: 32px; height: 32px;
+      background: var(--vk-blue);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 14px;
+      flex-shrink: 0;
+    }
+    .header-title { font-size: 17px; font-weight: 600; }
+    .header-badge {
+      background: var(--vk-blue-light);
+      color: var(--vk-blue);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+      letter-spacing: 0.3px;
+    }
+
+    /* ============================================================
+       Основной контейнер
+    ============================================================ */
+    .main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px 20px 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ============================================================
+       Карточки
+    ============================================================ */
+    .card {
+      background: var(--vk-card);
+      border-radius: var(--vk-radius);
+      box-shadow: var(--vk-shadow);
+      overflow: hidden;
+    }
+    .card-body { padding: 20px; }
+    .card-title {
+      font-size: 15px; font-weight: 600;
+      margin-bottom: 16px;
+      color: var(--vk-text);
+    }
+
+    /* ============================================================
+       Зона Drag & Drop
+    ============================================================ */
+    .dropzone {
+      border: 2px dashed var(--vk-border);
+      border-radius: var(--vk-radius);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color var(--transition), background var(--transition);
+      position: relative;
+    }
+    .dropzone:hover, .dropzone.drag-over {
+      border-color: var(--vk-blue);
+      background: var(--vk-blue-light);
+    }
+    .dropzone input[type="file"] {
+      position: absolute; inset: 0;
+      opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .dropzone-icon {
+      width: 56px; height: 56px;
+      margin: 0 auto 16px;
+      background: var(--vk-blue-light);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .dropzone-icon svg { color: var(--vk-blue); }
+    .dropzone-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+    .dropzone-subtitle { font-size: 13px; color: var(--vk-text-secondary); }
+    .dropzone-formats {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--vk-text-secondary);
+    }
+    .dropzone-formats span {
+      background: var(--vk-bg);
+      border-radius: 4px;
+      padding: 2px 6px;
+      margin: 2px;
+      display: inline-block;
+    }
+
+    /* ============================================================
+       Слайдер Before / After
+    ============================================================ */
+    .comparison-section { display: none; }
+    .comparison-section.visible { display: block; }
+
+    .comparison-wrapper {
+      position: relative;
+      width: 100%;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #000;
+      user-select: none;
+      touch-action: none;
+      cursor: col-resize;
+    }
+    .comparison-wrapper img {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 520px;
+      object-fit: contain;
+    }
+    .comparison-after {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      width: 50%; /* управляется через JS */
+    }
+    .comparison-after img {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; /* ширина родителя — вся ширина обёртки */
+      min-width: 100%;
+    }
+    /* Фиксируем ширину after-img как 100% от .comparison-wrapper */
+    .comparison-after img { width: var(--img-width, 100%); }
+
+    .comparison-divider {
+      position: absolute;
+      top: 0; bottom: 0;
+      left: 50%;
+      width: 2px;
+      background: #fff;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .comparison-handle {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px; height: 40px;
+      background: #fff;
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+    .comparison-handle svg { color: var(--vk-blue); }
+    .comparison-label {
+      position: absolute;
+      bottom: 10px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      letter-spacing: 0.5px;
+    }
+    .label-before { left: 10px; }
+    .label-after  { right: 10px; }
+
+    /* ============================================================
+       Прогресс-бар
+    ============================================================ */
+    .progress-section { display: none; }
+    .progress-section.visible { display: block; }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .progress-status { font-size: 14px; font-weight: 500; }
+    .progress-pct { font-size: 14px; color: var(--vk-text-secondary); }
+
+    .progress-track {
+      height: 6px;
+      background: var(--vk-bg);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--vk-blue);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    .progress-bar.success { background: var(--vk-success); }
+    .progress-bar.error   { background: var(--vk-error); }
+
+    /* ============================================================
+       Параметры улучшения
+    ============================================================ */
+    .params-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .param-chip {
+      background: var(--vk-bg);
+      border-radius: 8px;
+      padding: 10px 14px;
+    }
+    .param-chip-label {
+      font-size: 11px;
+      color: var(--vk-text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .param-chip-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--vk-blue);
+    }
+    .param-chip-value.positive::before { content: "+"; }
+
+    /* Ручные слайдеры */
+    .manual-controls { margin-top: 16px; }
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .slider-label {
+      width: 110px;
+      font-size: 13px;
+      color: var(--vk-text-secondary);
+      flex-shrink: 0;
+    }
+    .slider-row input[type="range"] {
+      flex: 1;
+      accent-color: var(--vk-blue);
+      height: 4px;
+    }
+    .slider-val {
+      width: 44px;
+      text-align: right;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--vk-text);
+    }
+
+    /* ============================================================
+       Кнопки
+    ============================================================ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background var(--transition), opacity var(--transition);
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--vk-blue); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--vk-blue-dark); }
+    .btn-secondary { background: var(--vk-bg); color: var(--vk-text); }
+    .btn-secondary:hover:not(:disabled) { background: var(--vk-border); }
+    .btn-danger { background: #fef0f0; color: var(--vk-error); }
+    .btn-danger:hover:not(:disabled) { background: #fde0e0; }
+
+    .actions-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+
+    /* ============================================================
+       Сообщение об ошибке
+    ============================================================ */
+    .error-box {
+      background: #fef0f0;
+      border: 1px solid #f9c0c0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: var(--vk-error);
+      font-size: 14px;
+      display: none;
+    }
+    .error-box.visible { display: block; }
+
+    /* ============================================================
+       Метрики производительности
+    ============================================================ */
+    .metrics-row {
+      display: flex;
+      gap: 20px;
+      font-size: 12px;
+      color: var(--vk-text-secondary);
+      margin-top: 10px;
+    }
+    .metrics-row span strong { color: var(--vk-text); }
+
+    /* ============================================================
+       Адаптивность
+    ============================================================ */
+    @media (max-width: 600px) {
+      .main { padding: 12px 12px 32px; gap: 12px; }
+      .card-body { padding: 14px; }
+      .dropzone { padding: 32px 16px; }
+      .params-grid { grid-template-columns: repeat(3, 1fr); }
+      .actions-row { flex-direction: column; }
+      .btn { width: 100%; }
+      .slider-label { width: 90px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ============================================================
+     Шапка
+============================================================ -->
+<header class="header">
+  <div class="header-inner">
+    <div class="header-logo">VK</div>
+    <span class="header-title">Image Enhancer</span>
+    <span class="header-badge">ML · Client-side</span>
+  </div>
+</header>
+
+<!-- ============================================================
+     Основной контент
+============================================================ -->
+<main class="main">
+
+  <!-- Загрузка файла -->
+  <div class="card">
+    <div class="card-body">
+      <div class="card-title">Загрузить изображение</div>
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.bmp,.heic,.heif" />
+        <div class="dropzone-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <div class="dropzone-title">Перетащите изображение сюда</div>
+        <div class="dropzone-subtitle">или нажмите для выбора файла</div>
+        <div class="dropzone-formats">
+          <span>JPG</span><span>PNG</span><span>BMP</span><span>HEIC</span>
+          <span style="margin-left:4px;color:#818c99">до 15 Мпикс</span>
+        </div>
+      </div>
+      <div class="error-box" id="errorBox"></div>
+    </div>
+  </div>
+
+  <!-- Прогресс -->
+  <div class="card progress-section" id="progressSection">
+    <div class="card-body">
+      <div class="progress-header">
+        <span class="progress-status" id="progressStatus">Анализируется...</span>
+        <span class="progress-pct" id="progressPct">0%</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="metrics-row" id="metricsRow" style="display:none">
+        <span>Размер: <strong id="metricSize">—</strong></span>
+        <span>Время: <strong id="metricTime">—</strong></span>
+        <span>Разрешение: <strong id="metricRes">—</strong></span>
+      </div>
+      <div class="actions-row">
+        <button class="btn btn-danger" id="cancelBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          Отменить
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Параметры ML -->
+  <div class="card" id="paramsCard" style="display:none">
+    <div class="card-body">
+      <div class="card-title">Параметры улучшения</div>
+      <div class="params-grid" id="paramsGrid"></div>
+
+      <!-- Ручная коррекция -->
+      <div class="manual-controls" id="manualControls" style="display:none">
+        <div class="card-title" style="margin-top:16px;font-size:13px;color:var(--vk-text-secondary)">
+          Ручная коррекция
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">Яркость</span>
+          <input type="range" id="slBrightness" min="-100" max="100" value="0" />
+          <span class="slider-val" id="valBrightness">0</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">Контрастность</span>
+          <input type="range" id="slContrast" min="-100" max="100" value="0" />
+          <span class="slider-val" id="valContrast">0</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">Насыщенность</span>
+          <input type="range" id="slSaturation" min="-100" max="100" value="0" />
+          <span class="slider-val" id="valSaturation">0</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">Гамма</span>
+          <input type="range" id="slGamma" min="50" max="200" value="100" />
+          <span class="slider-val" id="valGamma">1.00</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-label">Резкость</span>
+          <input type="range" id="slSharpness" min="0" max="100" value="0" />
+          <span class="slider-val" id="valSharpness">0</span>
+        </div>
+        <button class="btn btn-primary" id="reprocessBtn" style="margin-top:8px">
+          Применить повторно
+        </button>
+      </div>
+
+      <div class="actions-row" id="paramsActions">
+        <button class="btn btn-secondary" id="toggleManualBtn">Ручная коррекция</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Before / After -->
+  <div class="card comparison-section" id="comparisonSection">
+    <div class="card-body">
+      <div class="card-title">Результат</div>
+      <div class="comparison-wrapper" id="comparisonWrapper">
+        <img id="imgBefore" src="" alt="До" draggable="false" />
+        <div class="comparison-after" id="comparisonAfter">
+          <img id="imgAfter" src="" alt="После" draggable="false" />
+        </div>
+        <div class="comparison-divider" id="compDivider"></div>
+        <div class="comparison-handle" id="compHandle">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="15 18 9 12 15 6"/>
+            <polyline points="9 18 3 12 9 6" transform="translate(6,0)"/>
+          </svg>
+        </div>
+        <span class="comparison-label label-before">ДО</span>
+        <span class="comparison-label label-after">ПОСЛЕ</span>
+      </div>
+
+      <div class="actions-row">
+        <a class="btn btn-primary" id="downloadBtn" download="enhanced.jpg">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Скачать результат
+        </a>
+        <button class="btn btn-secondary" id="newImageBtn">
+          Новое изображение
+        </button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ============================================================
+     JavaScript — логика UI
+============================================================ -->
+<script type="module">
+/**
+ * UI-логика VK Image Enhancer.
+ * Использует TaskManager из enhancer.js через inline import.
+ * Весь код — асинхронный, без блокировки UI.
+ */
+
+// Импортируем собранный модуль (после сборки tsc → dist/)
+// В режиме разработки можно использовать TypeScript через CDN (см. README)
+import { TaskManager } from "./dist/enhancer.js";
+
+// ---------------------------------------------------------------------------
+// Инициализация
+// ---------------------------------------------------------------------------
+
+const manager = new TaskManager("./dist/worker.js");
+
+// Текущее состояние приложения
+const state = {
+  currentTaskId: null,      // ID активной задачи
+  originalFile: null,        // исходный File
+  originalDataUrl: null,     // data URL оригинала (для before)
+  processingStart: null,     // timestamp начала обработки
+  imgWidth: 0,
+  imgHeight: 0,
+};
+
+// ---------------------------------------------------------------------------
+// Элементы DOM
+// ---------------------------------------------------------------------------
+
+const dropzone        = document.getElementById("dropzone");
+const fileInput       = document.getElementById("fileInput");
+const errorBox        = document.getElementById("errorBox");
+const progressSection = document.getElementById("progressSection");
+const progressStatus  = document.getElementById("progressStatus");
+const progressPct     = document.getElementById("progressPct");
+const progressBar     = document.getElementById("progressBar");
+const metricsRow      = document.getElementById("metricsRow");
+const metricSize      = document.getElementById("metricSize");
+const metricTime      = document.getElementById("metricTime");
+const metricRes       = document.getElementById("metricRes");
+const cancelBtn       = document.getElementById("cancelBtn");
+const paramsCard      = document.getElementById("paramsCard");
+const paramsGrid      = document.getElementById("paramsGrid");
+const toggleManualBtn = document.getElementById("toggleManualBtn");
+const manualControls  = document.getElementById("manualControls");
+const reprocessBtn    = document.getElementById("reprocessBtn");
+const comparisonSection = document.getElementById("comparisonSection");
+const comparisonWrapper = document.getElementById("comparisonWrapper");
+const comparisonAfter   = document.getElementById("comparisonAfter");
+const compDivider       = document.getElementById("compDivider");
+const compHandle        = document.getElementById("compHandle");
+const imgBefore       = document.getElementById("imgBefore");
+const imgAfter        = document.getElementById("imgAfter");
+const downloadBtn     = document.getElementById("downloadBtn");
+const newImageBtn     = document.getElementById("newImageBtn");
+
+// Слайдеры ручной коррекции
+const sliders = {
+  brightness: { el: document.getElementById("slBrightness"), val: document.getElementById("valBrightness") },
+  contrast:   { el: document.getElementById("slContrast"),   val: document.getElementById("valContrast") },
+  saturation: { el: document.getElementById("slSaturation"), val: document.getElementById("valSaturation") },
+  gamma:      { el: document.getElementById("slGamma"),      val: document.getElementById("valGamma") },
+  sharpness:  { el: document.getElementById("slSharpness"),  val: document.getElementById("valSharpness") },
+};
+
+// ---------------------------------------------------------------------------
+// Drag & Drop
+// ---------------------------------------------------------------------------
+
+dropzone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  dropzone.classList.add("drag-over");
+});
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("drag-over");
+  const file = e.dataTransfer?.files?.[0];
+  if (file) handleFile(file);
+});
+fileInput.addEventListener("change", () => {
+  if (fileInput.files?.[0]) handleFile(fileInput.files[0]);
+});
+
+// ---------------------------------------------------------------------------
+// Основной поток обработки
+// ---------------------------------------------------------------------------
+
+async function handleFile(file) {
+  hideError();
+  resetUI();
+
+  // Сохраняем оригинальный data URL для before-слайдера
+  state.originalFile = file;
+  state.originalDataUrl = await fileToDataUrl(file);
+  imgBefore.src = state.originalDataUrl;
+
+  // Определяем разрешение через Image
+  const dims = await getImageDimensions(state.originalDataUrl);
+  state.imgWidth = dims.w;
+  state.imgHeight = dims.h;
+
+  showSection(progressSection);
+  updateProgress("Загрузка и декодирование...", 5);
+  state.processingStart = Date.now();
+
+  try {
+    const result = await manager.submit(file, {
+      outputFormat: "image/jpeg",
+      outputQuality: 0.92,
+    });
+    state.currentTaskId = result.taskId;
+  } catch (err) {
+    showError(err.message);
+    hideSection(progressSection);
+  }
+}
+
+// Слушаем события от TaskManager
+manager.addEventListener("taskStatusChanged", (e) => {
+  const { taskId, status, progress } = e.detail;
+  if (taskId !== state.currentTaskId) return;
+
+  switch (status) {
+    case "analyzing":
+      updateProgress("ML-анализ изображения...", progress);
+      break;
+    case "processing":
+      updateProgress("Применение улучшений...", progress);
+      break;
+    case "done":
+      onTaskDone(taskId);
+      break;
+    case "error": {
+      const st = manager.getStatus(taskId);
+      showError(st.error || "Ошибка обработки");
+      hideSection(progressSection);
+      break;
+    }
+    case "cancelled":
+      hideSection(progressSection);
+      updateProgress("Отменено", progress);
+      break;
+    default:
+      updateProgress("Обработка...", progress);
+  }
+});
+
+function onTaskDone(taskId) {
+  const elapsed = ((Date.now() - state.processingStart) / 1000).toFixed(1);
+  const resultUrl = manager.getResult(taskId);
+  const params = manager.getParams(taskId);
+
+  // Показываем результат
+  imgAfter.src = resultUrl;
+  downloadBtn.href = resultUrl;
+
+  updateProgress("Готово!", 100);
+  progressBar.classList.add("success");
+
+  // Метрики
+  metricSize.textContent = formatBytes(state.originalFile.size);
+  metricTime.textContent = `${elapsed} с`;
+  metricRes.textContent  = `${state.imgWidth}×${state.imgHeight}`;
+  metricsRow.style.display = "flex";
+
+  // Параметры
+  if (params) showParams(params);
+
+  // Показываем сравнение
+  showSection(comparisonSection);
+  comparisonSection.classList.add("visible");
+  comparisonSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  // Инициализируем слайдер сравнения после загрузки картинки
+  imgAfter.onload = () => {
+    initComparisonSlider();
+    syncAfterImageWidth();
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Отмена задачи
+// ---------------------------------------------------------------------------
+
+cancelBtn.addEventListener("click", async () => {
+  if (!state.currentTaskId) return;
+  await manager.cancel(state.currentTaskId);
+  state.currentTaskId = null;
+  hideSection(progressSection);
+});
+
+// ---------------------------------------------------------------------------
+// Повторная обработка с пользовательскими параметрами
+// ---------------------------------------------------------------------------
+
+reprocessBtn.addEventListener("click", async () => {
+  if (!state.originalFile) return;
+
+  const customParams = readSliderValues();
+  hideSection(comparisonSection);
+  showSection(progressSection);
+  progressBar.classList.remove("success", "error");
+  metricsRow.style.display = "none";
+  state.processingStart = Date.now();
+
+  // Отменяем предыдущую задачу если есть
+  if (state.currentTaskId) {
+    await manager.cancel(state.currentTaskId);
+  }
+
+  try {
+    const result = await manager.submit(state.originalFile, {
+      customParams,
+      outputFormat: "image/jpeg",
+      outputQuality: 0.92,
+    });
+    state.currentTaskId = result.taskId;
+  } catch (err) {
+    showError(err.message);
+    hideSection(progressSection);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Ручные слайдеры
+// ---------------------------------------------------------------------------
+
+toggleManualBtn.addEventListener("click", () => {
+  const visible = manualControls.style.display !== "none";
+  manualControls.style.display = visible ? "none" : "block";
+  toggleManualBtn.textContent = visible ? "Ручная коррекция" : "Скрыть";
+});
+
+// Синхронизируем значения слайдеров с метками
+Object.entries(sliders).forEach(([key, { el, val }]) => {
+  el.addEventListener("input", () => {
+    const raw = parseInt(el.value);
+    if (key === "gamma") {
+      val.textContent = (raw / 100).toFixed(2);
+    } else {
+      val.textContent = raw >= 0 ? `+${raw}` : String(raw);
+    }
+  });
+});
+
+function readSliderValues() {
+  return {
+    brightness: parseInt(sliders.brightness.el.value) / 100,
+    contrast:   parseInt(sliders.contrast.el.value)   / 100,
+    saturation: parseInt(sliders.saturation.el.value) / 100,
+    gamma:      parseInt(sliders.gamma.el.value)      / 100,
+    sharpness:  parseInt(sliders.sharpness.el.value)  / 100,
+  };
+}
+
+function setSliderValues(params) {
+  sliders.brightness.el.value = Math.round(params.brightness * 100);
+  sliders.contrast.el.value   = Math.round(params.contrast   * 100);
+  sliders.saturation.el.value = Math.round(params.saturation * 100);
+  sliders.gamma.el.value      = Math.round(params.gamma      * 100);
+  sliders.sharpness.el.value  = Math.round(params.sharpness  * 100);
+  // Обновляем метки
+  Object.values(sliders).forEach(({ el }) => el.dispatchEvent(new Event("input")));
+}
+
+// ---------------------------------------------------------------------------
+// Слайдер сравнения Before/After
+// ---------------------------------------------------------------------------
+
+function initComparisonSlider() {
+  setSliderPos(0.5); // начальная позиция 50%
+}
+
+function setSliderPos(ratio) {
+  const pct = `${(ratio * 100).toFixed(1)}%`;
+  comparisonAfter.style.width = pct;
+  compDivider.style.left = pct;
+  compHandle.style.left = pct;
+}
+
+function syncAfterImageWidth() {
+  // after-img должен иметь ширину всего wrapper, не родительского div
+  const w = comparisonWrapper.offsetWidth;
+  comparisonAfter.querySelector("img").style.width = w + "px";
+}
+
+// Мышь
+let isDragging = false;
+comparisonWrapper.addEventListener("mousedown", () => { isDragging = true; });
+window.addEventListener("mouseup",   () => { isDragging = false; });
+window.addEventListener("mousemove", (e) => {
+  if (!isDragging) return;
+  const rect = comparisonWrapper.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  setSliderPos(ratio);
+});
+
+// Touch
+comparisonWrapper.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  isDragging = true;
+}, { passive: false });
+window.addEventListener("touchend",  () => { isDragging = false; });
+window.addEventListener("touchmove", (e) => {
+  if (!isDragging) return;
+  const rect = comparisonWrapper.getBoundingClientRect();
+  const touch = e.touches[0];
+  const ratio = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
+  setSliderPos(ratio);
+}, { passive: true });
+
+window.addEventListener("resize", syncAfterImageWidth);
+
+// ---------------------------------------------------------------------------
+// Новое изображение
+// ---------------------------------------------------------------------------
+
+newImageBtn.addEventListener("click", () => {
+  if (state.currentTaskId) {
+    manager.cancel(state.currentTaskId).catch(() => {});
+  }
+  resetUI();
+  fileInput.value = "";
+});
+
+// ---------------------------------------------------------------------------
+// Вспомогательные UI-функции
+// ---------------------------------------------------------------------------
+
+function updateProgress(text, pct) {
+  progressStatus.textContent = text;
+  progressPct.textContent = `${Math.round(pct)}%`;
+  progressBar.style.width = `${pct}%`;
+}
+
+function showParams(params) {
+  paramsCard.style.display = "block";
+
+  const entries = [
+    { key: "brightness", label: "Яркость",       fmt: (v) => fmtSign(v, 2) },
+    { key: "contrast",   label: "Контраст",      fmt: (v) => fmtSign(v, 2) },
+    { key: "saturation", label: "Насыщенность",  fmt: (v) => fmtSign(v, 2) },
+    { key: "gamma",      label: "Гамма",         fmt: (v) => v.toFixed(2) },
+    { key: "sharpness",  label: "Резкость",      fmt: (v) => v.toFixed(2) },
+  ];
+
+  paramsGrid.innerHTML = entries.map(({ key, label, fmt }) => {
+    const v = params[key];
+    const cls = v > 0 ? "positive" : "";
+    return `<div class="param-chip">
+      <div class="param-chip-label">${label}</div>
+      <div class="param-chip-value ${cls}">${fmt(v)}</div>
+    </div>`;
+  }).join("");
+
+  setSliderValues(params);
+}
+
+function fmtSign(v, dec) {
+  const s = Math.abs(v).toFixed(dec);
+  return v >= 0 ? `+${s}` : `-${s}`;
+}
+
+function showError(msg) {
+  errorBox.textContent = msg;
+  errorBox.classList.add("visible");
+}
+function hideError() { errorBox.classList.remove("visible"); }
+
+function showSection(el) { el.classList.add("visible"); el.style.display = ""; }
+function hideSection(el) { el.classList.remove("visible"); }
+
+function resetUI() {
+  state.currentTaskId = null;
+  hideSection(progressSection);
+  hideSection(comparisonSection);
+  paramsCard.style.display = "none";
+  manualControls.style.display = "none";
+  progressBar.classList.remove("success", "error");
+  progressBar.style.width = "0%";
+  metricsRow.style.display = "none";
+  hideError();
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function getImageDimensions(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve({ w: 0, h: 0 });
+    img.src = src;
+  });
+}
+</script>
+
+</body>
+</html>
