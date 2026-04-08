@@ -10,6 +10,8 @@ export interface EnhancementParams {
     saturation: number;
     sharpness: number;
     gamma: number;
+    levelLow?: number;
+    levelHigh?: number;
 }
 /** Задача обработки изображения */
 export interface Task {

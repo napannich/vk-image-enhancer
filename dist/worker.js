@@ -54,7 +54,7 @@ async function processImage(taskId, imageData, customParams) {
     // --- Этап 3: Применение улучшений (50–85%) ---
     sendProgress(taskId, 55);
     await yieldToEventLoop();
-    const enhanced = applyEnhancements(imageData, finalParams.brightness, finalParams.contrast, finalParams.saturation, finalParams.gamma);
+    const enhanced = applyEnhancements(imageData, finalParams.brightness, finalParams.contrast, finalParams.saturation, finalParams.gamma, finalParams.levelLow ?? 0, finalParams.levelHigh ?? 1);
     sendProgress(taskId, 75);
     await yieldToEventLoop();
     // Применяем шарпинг если нужен
@@ -97,7 +97,7 @@ function applyUnsharpMask(imageData, strength) {
         2 / 16, 4 / 16, 2 / 16,
         1 / 16, 2 / 16, 1 / 16,
     ];
-    const amount = strength * 1.5; // коэффициент усиления
+    const amount = strength * 0.7; // коэффициент усиления
     for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
             const idx = (y * width + x) * 4;

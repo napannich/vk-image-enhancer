@@ -18,6 +18,8 @@ export interface EnhancementParams {
   saturation: number;   // -1.0 .. +1.0 (0 = без изменений)
   sharpness: number;    // 0.0 .. 1.0
   gamma: number;        // 0.5 .. 2.0 (1.0 = без изменений)
+  levelLow?: number;   // auto-levels low point (p5), 0..1
+  levelHigh?: number;  // auto-levels high point (p95), 0..1
 }
 
 /** Задача обработки изображения */

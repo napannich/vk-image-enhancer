@@ -155,13 +155,13 @@ function computePercentiles(hist) {
  * Применяет параметры улучшения к ImageData.
  * Все операции выполняются in-place через LUT (lookup table) для скорости.
  */
-export function applyEnhancements(imageData, brightness, contrast, saturation, gamma) {
+export function applyEnhancements(imageData, brightness, contrast, saturation, gamma, levelLow = 0, levelHigh = 1) {
     const { data, width, height } = imageData;
     const out = new ImageData(new Uint8ClampedArray(data), width, height);
     const outData = out.data;
     const len = width * height;
-    // Предварительно строим LUT для яркости/контраста/гаммы (только для luma)
-    const lut = buildLUT(brightness, contrast, gamma);
+    // Предварительно строим LUT для auto-levels/яркости/контраста/гаммы
+    const lut = buildLUT(brightness, contrast, gamma, levelLow, levelHigh);
     for (let i = 0; i < len; i++) {
         const idx = i * 4;
         let r = outData[idx];
@@ -179,20 +179,25 @@ export function applyEnhancements(imageData, brightness, contrast, saturation, g
     }
     return out;
 }
-/** Строит таблицу соответствия (LUT) 256 значений для brightness/contrast/gamma */
-function buildLUT(brightness, contrast, gamma) {
+/** Строит таблицу соответствия (LUT) 256 значений для auto-levels/brightness/contrast/gamma */
+function buildLUT(brightness, contrast, gamma, levelLow = 0, levelHigh = 1) {
     const lut = new Uint8ClampedArray(256);
-    const contrastFactor = (259 * (contrast * 127 + 128)) / (128 * (259 - contrast * 127));
+    const range = Math.max(levelHigh - levelLow, 0.01);
+    const contrastFactor = contrast !== 0
+        ? (259 * (contrast * 127 + 128)) / (128 * (259 - contrast * 127))
+        : 1;
     for (let i = 0; i < 256; i++) {
         let v = i / 255;
-        // Яркость (аддитивно)
-        v = v + brightness;
-        // Контраст (относительно средней точки 0.5)
-        v = contrastFactor * (v - 0.5) + 0.5;
-        // Гамма-коррекция
-        if (gamma !== 1.0 && v > 0) {
+        // Auto-levels: stretch [levelLow, levelHigh] → [0, 1]
+        v = (v - levelLow) / range;
+        // Brightness
+        v += brightness;
+        // Contrast around midpoint
+        if (contrast !== 0)
+            v = contrastFactor * (v - 0.5) + 0.5;
+        // Gamma
+        if (gamma !== 1.0 && v > 0)
             v = Math.pow(v, 1.0 / gamma);
-        }
         lut[i] = Math.round(Math.min(1, Math.max(0, v)) * 255);
     }
     return lut;

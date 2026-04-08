@@ -77,6 +77,8 @@ async function processImage(
     finalParams.contrast,
     finalParams.saturation,
     finalParams.gamma,
+    finalParams.levelLow ?? 0,
+    finalParams.levelHigh ?? 1,
   );
 
   sendProgress(taskId, 75);
@@ -131,7 +133,7 @@ function applyUnsharpMask(imageData: ImageData, strength: number): ImageData {
     1 / 16, 2 / 16, 1 / 16,
   ];
 
-  const amount = strength * 1.5; // коэффициент усиления
+  const amount = strength * 0.7; // коэффициент усиления
 
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
