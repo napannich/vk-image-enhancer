@@ -382,7 +382,7 @@
   <div class="header-inner">
     <div class="header-logo">VK</div>
     <span class="header-title">Image Enhancer</span>
-    <span class="header-badge">ML · Client-side</span>
+    <span class="header-badge">ML · Real-ESRGAN x4</span>
   </div>
 </header>
 
@@ -539,13 +539,119 @@
 const WORKER_CODE = `
 "use strict";
 
+/* ========== ONNX Runtime Web — Real-ESRGAN x4 Super Resolution ========== */
+let _ort_ok = false, _session = null;
+const SR_SCALE = 4, SR_TILE = 128, SR_PAD = 8;
+
+async function _initOrt() {
+  if (_ort_ok) return true;
+  try {
+    importScripts("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.min.js");
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/";
+    ort.env.wasm.numThreads = 1;
+    _ort_ok = true;
+    return true;
+  } catch(e) { return false; }
+}
+
+async function _loadModel(url) {
+  if (_session) return true;
+  if (!await _initOrt()) return false;
+  try {
+    _session = await ort.InferenceSession.create(url, {
+      executionProviders: ["wasm"],
+      graphOptimizationLevel: "all",
+    });
+    return true;
+  } catch(e) { return false; }
+}
+
+function _extractTile(data, w, h, tx, ty) {
+  var F = SR_TILE + 2 * SR_PAD, P = F * F;
+  var buf = new Float32Array(3 * P);
+  for (var y = 0; y < F; y++) {
+    var sy = Math.max(0, Math.min(h - 1, ty - SR_PAD + y));
+    for (var x = 0; x < F; x++) {
+      var sx = Math.max(0, Math.min(w - 1, tx - SR_PAD + x));
+      var si = (sy * w + sx) * 4, di = y * F + x;
+      buf[di]         = data[si]     / 255;
+      buf[P + di]     = data[si + 1] / 255;
+      buf[2 * P + di] = data[si + 2] / 255;
+    }
+  }
+  return buf;
+}
+
+function _placeTile(dst, dW, dH, out, tx, ty, tw, th) {
+  var F = (SR_TILE + 2 * SR_PAD) * SR_SCALE;
+  var crop = SR_PAD * SR_SCALE, P = F * F;
+  for (var y = 0; y < th * SR_SCALE; y++) {
+    var dy = ty * SR_SCALE + y;
+    if (dy >= dH) break;
+    for (var x = 0; x < tw * SR_SCALE; x++) {
+      var dx = tx * SR_SCALE + x;
+      if (dx >= dW) continue;
+      var si = (crop + y) * F + (crop + x);
+      var di = (dy * dW + dx) * 4;
+      dst[di]     = Math.max(0, Math.min(255, Math.round(out[si] * 255)));
+      dst[di + 1] = Math.max(0, Math.min(255, Math.round(out[P + si] * 255)));
+      dst[di + 2] = Math.max(0, Math.min(255, Math.round(out[2 * P + si] * 255)));
+      dst[di + 3] = 255;
+    }
+  }
+}
+
+async function _superResolve(taskId, imgData) {
+  var w = imgData.width, h = imgData.height, data = imgData.data;
+  var ow = w * SR_SCALE, oh = h * SR_SCALE;
+  var dst = new Uint8ClampedArray(ow * oh * 4);
+  var nx = Math.ceil(w / SR_TILE), ny = Math.ceil(h / SR_TILE);
+  var total = nx * ny, F = SR_TILE + 2 * SR_PAD, done = 0;
+
+  for (var iy = 0; iy < ny; iy++) {
+    for (var ix = 0; ix < nx; ix++) {
+      var x0 = ix * SR_TILE, y0 = iy * SR_TILE;
+      var tw = Math.min(SR_TILE, w - x0), th = Math.min(SR_TILE, h - y0);
+      var tensor = _extractTile(data, w, h, x0, y0);
+      var inp = new ort.Tensor("float32", tensor, [1, 3, F, F]);
+      var res = await _session.run({ input: inp });
+      _placeTile(dst, ow, oh, res.output.data, x0, y0, tw, th);
+      done++;
+      self.postMessage({ type: "progress", taskId: taskId, status: "processing",
+        progress: 15 + Math.round(done / total * 80),
+        message: "Real-ESRGAN x" + SR_SCALE + ": " + done + "/" + total });
+    }
+  }
+  return new ImageData(dst, ow, oh);
+}
+
+function _bilinearDown(data, ow, oh, nw, nh) {
+  var d = new Uint8ClampedArray(nw * nh * 4);
+  var rx = ow / nw, ry = oh / nh;
+  for (var y = 0; y < nh; y++) {
+    var fy = (y + 0.5) * ry - 0.5;
+    var y0 = Math.max(0, Math.floor(fy)), y1 = Math.min(oh - 1, y0 + 1);
+    var dy = fy - y0;
+    for (var x = 0; x < nw; x++) {
+      var fx = (x + 0.5) * rx - 0.5;
+      var x0 = Math.max(0, Math.floor(fx)), x1 = Math.min(ow - 1, x0 + 1);
+      var dx = fx - x0;
+      var di = (y * nw + x) * 4;
+      for (var c = 0; c < 3; c++) {
+        d[di+c] = Math.round(
+          (1-dx)*(1-dy) * data[(y0*ow+x0)*4+c] +
+          dx*(1-dy)     * data[(y0*ow+x1)*4+c] +
+          (1-dx)*dy     * data[(y1*ow+x0)*4+c] +
+          dx*dy         * data[(y1*ow+x1)*4+c]);
+      }
+      d[di+3] = 255;
+    }
+  }
+  return new ImageData(d, nw, nh);
+}
+
 /* ----------------------------------------------------------
-   ImageAnalyzer — ML-анализ и улучшение изображений
-   MLP: 3 входа (яркость, контраст, насыщенность)
-        → 8 нейронов скрытого слоя (ReLU)
-        → 3 выхода (дельта яркости, контраста, насыщенности)
-   Веса предобучены: модель обучена на датасете из 500 фото,
-   оптимизируя PSNR. Веса вшиты константами.
+   ImageAnalyzer — fallback (гистограмма + улучшения без ML)
 ---------------------------------------------------------- */
 class ImageAnalyzer {
 
@@ -774,51 +880,84 @@ class ImageAnalyzer {
 ---------------------------------------------------------- */
 const analyzer = new ImageAnalyzer();
 
-self.onmessage = function(e) {
-  const { type, taskId, imageData, customParams } = e.data;
+self.onmessage = async function(e) {
+  var data = e.data;
+  var type = data.type, taskId = data.taskId, imageData = data.imageData;
+  var customParams = data.customParams, modelUrl = data.modelUrl;
 
   if (type !== 'process') return;
 
   try {
-    /* Шаг 1: анализ гистограммы */
-    self.postMessage({ type: 'progress', taskId, status: 'analyzing', progress: 15 });
+    /* ====== ONNX Super Resolution (приоритет) ====== */
+    if (!customParams && modelUrl) {
+      self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 3,
+        message: 'Загрузка ML модели Real-ESRGAN...' });
 
-    const features = analyzer.analyzeHistogram(imageData);
+      var ok = await _loadModel(modelUrl);
+      if (ok) {
+        self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 10,
+          message: 'Real-ESRGAN готов' });
 
-    self.postMessage({ type: 'progress', taskId, status: 'analyzing', progress: 35 });
+        var input = imageData;
+        var MAX_SIDE = 768;
+        var longest = Math.max(input.width, input.height);
+        if (longest > MAX_SIDE) {
+          var s = MAX_SIDE / longest;
+          input = _bilinearDown(input.data, input.width, input.height,
+            Math.round(input.width * s), Math.round(input.height * s));
+          self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 12,
+            message: 'Подготовка: ' + input.width + 'x' + input.height });
+        }
 
-    /* Шаг 2: ML-предсказание параметров */
-    let params;
+        var result = await _superResolve(taskId, input);
+
+        self.postMessage({
+          type: 'done', taskId: taskId,
+          imageData: result,
+          params: { brightness: 0, contrast: 0, saturation: 0, gamma: 1.0, sharpness: 0 },
+          mode: 'onnx',
+        }, [result.data.buffer]);
+        return;
+      }
+    }
+
+    /* ====== Fallback: базовое улучшение ====== */
+    self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 15,
+      message: 'Анализ гистограммы...' });
+
+    var features = analyzer.analyzeHistogram(imageData);
+
+    self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 35 });
+
+    var params;
     if (customParams) {
-      /* Ручные параметры от пользователя */
       params = customParams;
     } else {
       params = analyzer.predict(features);
     }
 
-    self.postMessage({ type: 'progress', taskId, status: 'processing', progress: 55 });
+    self.postMessage({ type: 'progress', taskId: taskId, status: 'processing', progress: 55,
+      message: 'Цветокоррекция...' });
 
-    /* Шаг 3: применение улучшений */
-    const enhanced = analyzer.applyEnhancements(imageData, params);
+    var enhanced = analyzer.applyEnhancements(imageData, params);
 
-    self.postMessage({ type: 'progress', taskId, status: 'processing', progress: 75 });
+    self.postMessage({ type: 'progress', taskId: taskId, status: 'processing', progress: 75,
+      message: 'Lanczos3 апскейл...' });
 
-    /* Шаг 4: Lanczos3 апскейл 2x */
-    const result = analyzer.upscaleLanczos2x(enhanced);
+    var result2 = analyzer.upscaleLanczos2x(enhanced);
 
-    self.postMessage({ type: 'progress', taskId, status: 'processing', progress: 90 });
+    self.postMessage({ type: 'progress', taskId: taskId, status: 'processing', progress: 90 });
 
-    /* Возвращаем результат */
     self.postMessage({
-      type: 'done',
-      taskId,
-      imageData: result,
-      params,
-      features,
-    }, [result.data.buffer]);
+      type: 'done', taskId: taskId,
+      imageData: result2,
+      params: params,
+      features: features,
+      mode: 'fallback',
+    }, [result2.data.buffer]);
 
   } catch (err) {
-    self.postMessage({ type: 'error', taskId, message: err.message });
+    self.postMessage({ type: 'error', taskId: taskId, message: err.message });
   }
 };
 `;
@@ -836,6 +975,9 @@ class TaskManager extends EventTarget {
 
   constructor() {
     super();
+
+    /* URL модели Real-ESRGAN ONNX (4.6 MB, загружается лениво) */
+    this._modelUrl = new URL('./models/realesrgan-x4.onnx', document.baseURI).href;
 
     /* Создаём Web Worker из Blob URL */
     const blob      = new Blob([WORKER_CODE], { type: 'application/javascript' });
@@ -927,6 +1069,18 @@ class TaskManager extends EventTarget {
     return task ? task.params : null;
   }
 
+  /* Режим обработки (onnx | fallback) */
+  getMode(taskId) {
+    const task = this._tasks.get(taskId);
+    return task ? (task.mode || 'fallback') : 'fallback';
+  }
+
+  /* Размер выходного изображения */
+  getOutputSize(taskId) {
+    const task = this._tasks.get(taskId);
+    return task ? { w: task.outWidth || 0, h: task.outHeight || 0 } : { w: 0, h: 0 };
+  }
+
   /* Получить data URL результата */
   getResultUrl(taskId) {
     const task = this._tasks.get(taskId);
@@ -989,6 +1143,7 @@ class TaskManager extends EventTarget {
         taskId,
         imageData,
         customParams: task.customParams,
+        modelUrl:     this._modelUrl,
       }, [imageData.data.buffer]);
 
     }).catch(err => {
@@ -1008,7 +1163,8 @@ class TaskManager extends EventTarget {
     if (type === 'progress') {
       task.status   = data.status;
       task.progress = data.progress;
-      this._emitStatus(taskId, data.status, data.progress);
+      task.message  = data.message || '';
+      this._emitStatus(taskId, data.status, data.progress, data.message);
       return;
     }
 
@@ -1018,6 +1174,9 @@ class TaskManager extends EventTarget {
         task.status     = 'done';
         task.progress   = 100;
         task.params     = data.params;
+        task.mode       = data.mode || 'fallback';
+        task.outWidth   = data.imageData.width;
+        task.outHeight  = data.imageData.height;
         task.resultBlob = blob;
         task.resultUrl  = url;
         this._emitStatus(taskId, 'done', 100);
@@ -1114,9 +1273,9 @@ class TaskManager extends EventTarget {
   }
 
   /* Генерируем CustomEvent для подписчиков */
-  _emitStatus(taskId, status, progress) {
+  _emitStatus(taskId, status, progress, message) {
     this.dispatchEvent(new CustomEvent('taskStatusChanged', {
-      detail: { taskId, status, progress }
+      detail: { taskId, status, progress, message: message || '' }
     }));
   }
 }
@@ -1249,12 +1408,13 @@ manager.addEventListener('taskStatusChanged', (e) => {
   const { taskId, status, progress } = e.detail;
   if (taskId !== state.currentTaskId) return;
 
+  const msg = e.detail.message;
   switch (status) {
     case 'analyzing':
-      updateProgress('ML-анализ изображения...', progress);
+      updateProgress(msg || 'ML-анализ изображения...', progress);
       break;
     case 'processing':
-      updateProgress('Применение улучшений...', progress);
+      updateProgress(msg || 'Применение улучшений...', progress);
       break;
     case 'done':
       onTaskDone(taskId);
@@ -1277,16 +1437,20 @@ function onTaskDone(taskId) {
   const elapsed   = ((Date.now() - state.processingStart) / 1000).toFixed(1);
   const resultUrl = manager.getResult(taskId);
   const params    = manager.getParams(taskId);
+  const mode      = manager.getMode(taskId);
+  const outSize   = manager.getOutputSize(taskId);
 
   imgAfter.src    = resultUrl;
   downloadBtn.href = resultUrl;
 
-  updateProgress('Готово!', 100);
+  const modeLabel = mode === 'onnx' ? 'Real-ESRGAN x4' : 'Basic + Lanczos';
+  updateProgress(modeLabel + ' — готово!', 100);
   progressBar.classList.add('success');
 
   metricSize.textContent = formatBytes(state.originalFile.size);
   metricTime.textContent = elapsed + ' с';
-  metricRes.textContent  = state.imgWidth + '×' + state.imgHeight;
+  metricRes.textContent  = state.imgWidth + '\u00D7' + state.imgHeight
+    + (outSize.w ? ' \u2192 ' + outSize.w + '\u00D7' + outSize.h : '');
   metricsRow.style.display = 'flex';
 
   if (params) showParams(params);
