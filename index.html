@@ -169,13 +169,13 @@
     }
     .comparison-after {
       position: absolute;
-      inset: 0;
+      top: 0; right: 0; bottom: 0; left: auto;
       overflow: hidden;
       width: 50%;
     }
     .comparison-after img {
       position: absolute;
-      top: 0; left: 0;
+      top: 0; right: 0;
       width: 100%;
       min-width: 100%;
     }
@@ -693,6 +693,80 @@ class ImageAnalyzer {
 
     return new ImageData(data, width, height);
   }
+
+  /* Lanczos3 ядро */
+  _lanczos3(x) {
+    if (x === 0) return 1.0;
+    if (Math.abs(x) >= 3) return 0.0;
+    const px = Math.PI * x;
+    return 3.0 * Math.sin(px) * Math.sin(px / 3.0) / (px * px);
+  }
+
+  /* Реальный Lanczos3 апскейл — разделимая фильтрация (горизонталь → вертикаль) */
+  upscaleLanczos2x(src) {
+    const sw = src.width, sh = src.height;
+
+    /* Ограничиваем: выход не более 4 Мпикс */
+    const maxOut = 4_000_000;
+    const rawScale = 2;
+    const scale = (sw * sh * rawScale * rawScale > maxOut)
+      ? Math.sqrt(maxOut / (sw * sh))
+      : rawScale;
+
+    const dw = Math.round(sw * scale);
+    const dh = Math.round(sh * scale);
+
+    /* 1. Горизонтальный проход: src (sw×sh) → tmp (dw×sh) */
+    const tmp = new Float32Array(dw * sh * 4);
+    for (let y = 0; y < sh; y++) {
+      for (let dx = 0; dx < dw; dx++) {
+        const sx = (dx + 0.5) / scale - 0.5;
+        const x0 = Math.floor(sx) - 2;
+        let r = 0, g = 0, b = 0, w = 0;
+        for (let k = 0; k <= 5; k++) {
+          const px = x0 + k;
+          if (px < 0 || px >= sw) continue;
+          const wk = this._lanczos3(sx - px);
+          const si = (y * sw + px) * 4;
+          r += src.data[si    ] * wk;
+          g += src.data[si + 1] * wk;
+          b += src.data[si + 2] * wk;
+          w += wk;
+        }
+        const ti = (y * dw + dx) * 4;
+        if (w !== 0) { r /= w; g /= w; b /= w; }
+        tmp[ti] = r; tmp[ti+1] = g; tmp[ti+2] = b; tmp[ti+3] = 255;
+      }
+    }
+
+    /* 2. Вертикальный проход: tmp (dw×sh) → dst (dw×dh) */
+    const dstData = new Uint8ClampedArray(dw * dh * 4);
+    for (let dy = 0; dy < dh; dy++) {
+      const sy = (dy + 0.5) / scale - 0.5;
+      const y0 = Math.floor(sy) - 2;
+      for (let dx = 0; dx < dw; dx++) {
+        let r = 0, g = 0, b = 0, w = 0;
+        for (let k = 0; k <= 5; k++) {
+          const py = y0 + k;
+          if (py < 0 || py >= sh) continue;
+          const wk = this._lanczos3(sy - py);
+          const ti = (py * dw + dx) * 4;
+          r += tmp[ti    ] * wk;
+          g += tmp[ti + 1] * wk;
+          b += tmp[ti + 2] * wk;
+          w += wk;
+        }
+        const di = (dy * dw + dx) * 4;
+        if (w !== 0) { r /= w; g /= w; b /= w; }
+        dstData[di    ] = Math.max(0, Math.min(255, Math.round(r)));
+        dstData[di + 1] = Math.max(0, Math.min(255, Math.round(g)));
+        dstData[di + 2] = Math.max(0, Math.min(255, Math.round(b)));
+        dstData[di + 3] = 255;
+      }
+    }
+
+    return new ImageData(dstData, dw, dh);
+  }
 }
 
 /* ----------------------------------------------------------
@@ -727,16 +801,21 @@ self.onmessage = function(e) {
     /* Шаг 3: применение улучшений */
     const enhanced = analyzer.applyEnhancements(imageData, params);
 
+    self.postMessage({ type: 'progress', taskId, status: 'processing', progress: 75 });
+
+    /* Шаг 4: Lanczos3 апскейл 2x */
+    const result = analyzer.upscaleLanczos2x(enhanced);
+
     self.postMessage({ type: 'progress', taskId, status: 'processing', progress: 90 });
 
     /* Возвращаем результат */
     self.postMessage({
       type: 'done',
       taskId,
-      imageData: enhanced,
+      imageData: result,
       params,
       features,
-    }, [enhanced.data.buffer]);
+    }, [result.data.buffer]);
 
   } catch (err) {
     self.postMessage({ type: 'error', taskId, message: err.message });
@@ -1313,10 +1392,11 @@ function initComparisonSlider() {
 }
 
 function setSliderPos(ratio) {
-  const pct = (ratio * 100).toFixed(1) + '%';
-  comparisonAfter.style.width = pct;
-  compDivider.style.left      = pct;
-  compHandle.style.left       = pct;
+  const leftPct  = (ratio * 100).toFixed(1) + '%';
+  const rightPct = ((1 - ratio) * 100).toFixed(1) + '%';
+  comparisonAfter.style.width = rightPct;
+  compDivider.style.left      = leftPct;
+  compHandle.style.left       = leftPct;
 }
 
 function syncAfterImageWidth() {
