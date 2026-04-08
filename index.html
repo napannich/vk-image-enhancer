@@ -549,97 +549,70 @@ const WORKER_CODE = `
 ---------------------------------------------------------- */
 class ImageAnalyzer {
 
-  constructor() {
-    /* Веса слоя 1: [8 нейронов × 3 входа] */
-    this.W1 = [
-      [ 1.24, -0.87,  0.45],
-      [-0.63,  1.52, -1.10],
-      [ 0.91,  0.34,  1.78],
-      [-1.45,  0.76, -0.22],
-      [ 0.58, -1.23,  0.89],
-      [ 1.10,  0.95, -0.67],
-      [-0.38,  1.41,  0.53],
-      [ 0.72, -0.54,  1.35],
-    ];
-    /* Смещения слоя 1: [8] */
-    this.b1 = [0.12, -0.08, 0.21, -0.15, 0.07, 0.18, -0.11, 0.09];
-
-    /* Веса слоя 2: [3 выхода × 8 нейронов] */
-    this.W2 = [
-      [ 0.83, -0.42,  0.67, -0.91,  0.55,  0.38, -0.74,  0.62],
-      [-0.51,  0.94, -0.33,  0.78, -0.47,  0.85,  0.29, -0.66],
-      [ 0.39,  0.71, -0.88,  0.44,  0.92, -0.37,  0.61,  0.48],
-    ];
-    /* Смещения слоя 2: [3] */
-    this.b2 = [0.05, -0.03, 0.08];
-  }
-
   /* ReLU активация */
   _relu(x) { return x > 0 ? x : 0; }
 
-  /* Прямой проход MLP */
+  /* Предсказание параметров улучшения на основе гистограммы */
   predict(features) {
-    /* Нормализуем входы в диапазон [-1, 1] */
-    const x = [
-      (features.avgBrightness / 127.5) - 1.0,
-      (features.avgContrast   / 64.0)  - 1.0,
-      (features.avgSaturation / 127.5) - 1.0,
-    ];
+    /* Auto-levels: растяжка гистограммы от p2 до p98 */
+    const levelLow  = features.p2;
+    const levelHigh = features.p98;
 
-    /* Скрытый слой (ReLU) */
-    const h = this.W1.map((row, i) => {
-      const sum = row.reduce((acc, w, j) => acc + w * x[j], 0) + this.b1[i];
-      return this._relu(sum);
-    });
+    /* Буст насыщенности для бледных изображений */
+    const satNorm = features.avgSaturation / 255;
+    let saturation = 0;
+    if      (satNorm < 0.15) saturation = 0.35;
+    else if (satNorm < 0.25) saturation = 0.20;
+    else if (satNorm < 0.35) saturation = 0.10;
 
-    /* Выходной слой (tanh для ограничения диапазона) */
-    const out = this.W2.map((row, i) => {
-      const sum = row.reduce((acc, w, j) => acc + w * h[j], 0) + this.b2[i];
-      return Math.tanh(sum);
-    });
-
-    /* Масштабируем выходы в практические диапазоны */
     return {
-      brightness: out[0] * 0.35,   /* ±35% */
-      contrast:   out[1] * 0.40,   /* ±40% */
-      saturation: out[2] * 0.45,   /* ±45% */
-      gamma:      1.0 + out[0] * 0.3,
-      sharpness:  Math.max(0, out[1] * 0.5),
+      brightness: 0,
+      contrast:   0,
+      saturation,
+      gamma:      1.0,
+      sharpness:  0.30,
+      levelLow,
+      levelHigh,
     };
   }
 
-  /* Анализ гистограммы: вычисляем среднюю яркость, контраст, насыщенность */
+  /* Анализ гистограммы: вычисляем p2/p98 для auto-levels и насыщенность */
   analyzeHistogram(imageData) {
     const data = imageData.data;
     const len  = data.length;
-    let sumBright = 0, sumContrast = 0, sumSat = 0;
-    let count = 0;
+    const hist = new Uint32Array(256);
+    let sumBright = 0, sumSat = 0, count = 0;
 
-    /* Шагаем через каждый 4-й пиксель для скорости (выборка 25%) */
-    for (let i = 0; i < len; i += 16) {
+    for (let i = 0; i < len; i += 4) {
       const r = data[i], g = data[i+1], b = data[i+2];
-
-      /* Яркость по формуле Rec.709 */
-      const bright = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const bright = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+      hist[bright]++;
       sumBright += bright;
-
-      /* Контраст = отклонение от среднего (локальный прокси) */
-      const mn = Math.min(r, g, b);
       const mx = Math.max(r, g, b);
-      sumContrast += (mx - mn);
-
-      /* Насыщенность в HSL */
+      const mn = Math.min(r, g, b);
       const l = (mx + mn) / 2;
       const sat = mx === mn ? 0 : (mx - mn) / (1 - Math.abs(2 * l / 255 - 1));
       sumSat += Math.min(255, sat * 255);
-
       count++;
     }
 
+    /* Вычисляем перцентили p2 и p98 */
+    let cumsum = 0;
+    let p2 = 0, p98 = 255;
+    for (let i = 0; i < 256; i++) {
+      cumsum += hist[i];
+      if (p2 === 0 && cumsum / count >= 0.02) p2 = i;
+      if (cumsum / count >= 0.98) { p98 = i; break; }
+    }
+    /* Гарантируем минимальный диапазон растяжки */
+    if (p98 - p2 < 20) { p2 = 0; p98 = 255; }
+
     return {
-      avgBrightness: count > 0 ? sumBright  / count : 128,
-      avgContrast:   count > 0 ? sumContrast / count : 64,
-      avgSaturation: count > 0 ? sumSat     / count : 128,
+      avgBrightness: count > 0 ? sumBright / count : 128,
+      avgSaturation: count > 0 ? sumSat    / count : 128,
+      avgContrast:   p98 - p2,
+      p2,
+      p98,
     };
   }
 
@@ -656,16 +629,19 @@ class ImageAnalyzer {
     const g  = params.gamma;       /* [0.5, 2.0] */
     const sh = params.sharpness;   /* [0, 1] */
 
-    /* LUT для гаммы и яркости — ускоряет в 255× */
+    /* LUT с auto-levels: растяжка [levelLow, levelHigh] → [0, 255] */
     const gammaLUT = new Uint8ClampedArray(256);
+    const lLow  = (params.levelLow  ?? 0);
+    const lHigh = (params.levelHigh ?? 255);
+    const lRange = Math.max(lHigh - lLow, 10);
+
     for (let i = 0; i < 256; i++) {
-      let v = i / 255;
-      /* Гамма */
-      v = Math.pow(v, 1.0 / Math.max(0.1, g));
-      /* Яркость: additive */
+      let v = (i - lLow) / lRange;
+      /* Дополнительные яркость/контраст (обычно 0) */
       v += b * 0.5;
-      /* Контраст: масштаб относительно 0.5 */
       v = (v - 0.5) * (1.0 + c) + 0.5;
+      /* Гамма (обычно 1.0) */
+      if (g !== 1.0) v = Math.pow(Math.max(0, v), 1.0 / g);
       gammaLUT[i] = Math.round(Math.max(0, Math.min(1, v)) * 255);
     }
 
@@ -692,7 +668,7 @@ class ImageAnalyzer {
     /* Резкость: unsharp mask 3×3 (только если sh > 0.05) */
     if (sh > 0.05) {
       const src    = new Uint8ClampedArray(data);
-      const amount = sh * 1.5;
+      const amount = sh * 0.8;
 
       for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
