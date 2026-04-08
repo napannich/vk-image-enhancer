@@ -297,8 +297,7 @@ function validateFile(file: File): void {
     );
   }
 
-  // 15 Мпикс ≈ 45 МБ для несжатого BMP; для JPEG/PNG 100 МБ — перебор
-  const MAX_SIZE_MB = 120;
+  const MAX_SIZE_MB = 10;
   if (file.size > MAX_SIZE_MB * 1024 * 1024) {
     throw new Error(`Файл слишком большой (максимум ${MAX_SIZE_MB} МБ).`);
   }

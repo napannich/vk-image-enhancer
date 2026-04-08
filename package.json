@@ -3,17 +3,17 @@
   "version": "1.0.0",
   "description": "ML-powered image enhancement in browser | VK Education Practice",
   "scripts": {
-    "build": "tsc && node scripts/bundle.js",
-    "dev": "npx http-server . -p 3000 -o",
-    "test": "npx jest --config jest.config.js"
+    "build": "tsc",
+    "dev": "npx http-server . -p 3000 -o"
   },
-  "keywords": ["ml", "image-enhancement", "tensorflow.js", "vk-education"],
+  "keywords": [
+    "ml",
+    "image-enhancement",
+    "vk-education"
+  ],
   "author": "Andrey Napalkov",
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.4.0"
-  },
-  "dependencies": {
-    "@tensorflow/tfjs": "^4.17.0"
+    "typescript": "^5.9.3"
   }
 }

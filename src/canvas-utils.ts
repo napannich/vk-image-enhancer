@@ -273,24 +273,18 @@ function hueToRgb(p: number, q: number, t: number): number {
   return p;
 }
 
-/** Конвертирует ImageData в data URL заданного формата */
+/** Конвертирует ImageData в data URL заданного формата (только main thread) */
 export function imageDataToDataUrl(
   imageData: ImageData,
   format: "image/jpeg" | "image/png" = "image/jpeg",
   quality = 0.92,
 ): string {
-  const canvas = new OffscreenCanvas(imageData.width, imageData.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = imageData.width;
+  canvas.height = imageData.height;
   const ctx = canvas.getContext("2d")!;
   ctx.putImageData(imageData, 0, 0);
-
-  // OffscreenCanvas не поддерживает toDataURL — конвертируем через Blob
-  // Этот путь используется только в main thread; в worker — через transferable
-  const regularCanvas = document.createElement("canvas");
-  regularCanvas.width = imageData.width;
-  regularCanvas.height = imageData.height;
-  const rCtx = regularCanvas.getContext("2d")!;
-  rCtx.putImageData(imageData, 0, 0);
-  return regularCanvas.toDataURL(format, quality);
+  return canvas.toDataURL(format, quality);
 }
 
 /** Конвертирует ImageData в Blob (для Web Worker через OffscreenCanvas) */
