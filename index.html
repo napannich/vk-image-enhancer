@@ -545,25 +545,43 @@ const SR_SCALE = 4, SR_TILE = 128, SR_PAD = 8;
 
 async function _initOrt() {
   if (_ort_ok) return true;
-  try {
-    importScripts("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.min.js");
-    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/";
-    ort.env.wasm.numThreads = 1;
-    _ort_ok = true;
-    return true;
-  } catch(e) { return false; }
+  var cdns = [
+    "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/",
+    "https://unpkg.com/onnxruntime-web@1.21.0/dist/"
+  ];
+  for (var i = 0; i < cdns.length; i++) {
+    try {
+      var ctrl = new AbortController();
+      var tid = setTimeout(function() { ctrl.abort(); }, 12000);
+      var r = await fetch(cdns[i] + "ort.min.js", { signal: ctrl.signal });
+      clearTimeout(tid);
+      if (!r.ok) continue;
+      var code = await r.text();
+      (0, eval)(code);
+      if (typeof ort === "undefined") continue;
+      ort.env.wasm.wasmPaths = cdns[i];
+      ort.env.wasm.numThreads = 1;
+      _ort_ok = true;
+      return true;
+    } catch(e) { continue; }
+  }
+  return false;
 }
 
 async function _loadModel(url) {
   if (_session) return true;
   if (!await _initOrt()) return false;
   try {
-    _session = await ort.InferenceSession.create(url, {
+    var p = ort.InferenceSession.create(url, {
       executionProviders: ["wasm"],
       graphOptimizationLevel: "all",
     });
+    var timeout = new Promise(function(_, rej) {
+      setTimeout(function() { rej(new Error("model load timeout")); }, 30000);
+    });
+    _session = await Promise.race([p, timeout]);
     return true;
-  } catch(e) { return false; }
+  } catch(e) { _session = null; return false; }
 }
 
 function _extractTile(data, w, h, tx, ty) {
@@ -891,9 +909,20 @@ self.onmessage = async function(e) {
     /* ====== ONNX Super Resolution (приоритет) ====== */
     if (!customParams && modelUrl) {
       self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 3,
-        message: 'Загрузка ML модели Real-ESRGAN...' });
+        message: 'Загрузка ONNX Runtime...' });
 
-      var ok = await _loadModel(modelUrl);
+      var ortReady = await _initOrt();
+      if (!ortReady) {
+        self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 5,
+          message: 'ONNX Runtime недоступен, fallback...' });
+      }
+
+      if (ortReady) {
+        self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 5,
+          message: 'Загрузка модели Real-ESRGAN (4.6 MB)...' });
+      }
+
+      var ok = ortReady && await _loadModel(modelUrl);
       if (ok) {
         self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 10,
           message: 'Real-ESRGAN готов' });
