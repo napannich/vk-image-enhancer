@@ -1,19 +1,37 @@
 {
   "name": "vk-image-enhancer",
   "version": "1.0.0",
-  "description": "ML-powered image enhancement in browser | VK Education Practice",
+  "description": "ML-powered image enhancement in browser | VK Education Practice | ITMO",
+  "homepage": "https://napannich.github.io/vk-image-enhancer",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/napannich/vk-image-enhancer.git"
+  },
+  "bugs": "https://github.com/napannich/vk-image-enhancer/issues",
   "scripts": {
     "build": "tsc",
-    "dev": "npx http-server . -p 3000 -o"
+    "dev": "npx http-server . -p 3000 -o -c-1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "samples": "node scripts/generate-samples.mjs",
+    "check-size": "node scripts/check-bundle-size.mjs"
   },
   "keywords": [
-    "ml",
+    "machine-learning",
     "image-enhancement",
-    "vk-education"
+    "onnx",
+    "real-esrgan",
+    "super-resolution",
+    "webworker",
+    "vk-education",
+    "itmo"
   ],
   "author": "Andrey Napalkov",
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "@vitest/coverage-v8": "^2.1.0",
+    "happy-dom": "^15.7.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.0"
   }
 }

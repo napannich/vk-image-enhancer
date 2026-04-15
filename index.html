@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VK Image Enhancer — ML улучшение изображений</title>
   <meta name="description" content="Улучшение изображений в браузере с помощью ML: яркость, контрастность, цветность" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230077ff'/%3E%3Cpath fill='%23fff' d='M5 9h4l3 7 3-7h4l-5 12h-4L5 9zm13 0h9v3h-5v2h4v3h-4v2h5v3h-9V9z'/%3E%3C/svg%3E" />
   <style>
     /* ============================================================
        Переменные + сброс стилей
@@ -117,6 +118,36 @@
       border-color: var(--vk-blue);
       background: var(--vk-blue-light);
     }
+
+    /* Переключатель режима ML / SR */
+    .mode-toggle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .mode-option { cursor: pointer; }
+    .mode-option input { position: absolute; opacity: 0; pointer-events: none; }
+    .mode-card {
+      border: 2px solid var(--vk-border);
+      border-radius: var(--vk-radius);
+      padding: 12px 14px;
+      transition: border-color var(--transition), background var(--transition);
+    }
+    .mode-option input:checked + .mode-card {
+      border-color: var(--vk-blue);
+      background: var(--vk-blue-light);
+    }
+    .mode-option input:focus-visible + .mode-card {
+      outline: 2px solid var(--vk-blue);
+      outline-offset: 2px;
+    }
+    .mode-title { font-weight: 600; font-size: 14px; color: var(--vk-text); }
+    .mode-desc  { font-size: 12px; color: var(--vk-text-secondary); margin-top: 4px; line-height: 1.4; }
+    @media (max-width: 480px) {
+      .mode-toggle { grid-template-columns: 1fr; }
+    }
+
     .dropzone input[type="file"] {
       position: absolute; inset: 0;
       opacity: 0; cursor: pointer; width: 100%; height: 100%;
@@ -382,7 +413,7 @@
   <div class="header-inner">
     <div class="header-logo">VK</div>
     <span class="header-title">Image Enhancer</span>
-    <span class="header-badge">ML · Real-ESRGAN x4</span>
+    <span class="header-badge" id="headerBadge">ML · Histogram Regressor</span>
   </div>
 </header>
 
@@ -412,6 +443,24 @@
         </div>
       </div>
       <div class="error-box" id="errorBox"></div>
+
+      <!-- Переключатель режима обработки -->
+      <div class="mode-toggle" role="radiogroup" aria-label="Режим обработки">
+        <label class="mode-option">
+          <input type="radio" name="mode" value="ml" checked />
+          <div class="mode-card">
+            <div class="mode-title">ML-коррекция</div>
+            <div class="mode-desc">Яркость, контраст, цветность. ~1–3 c. Соответствует ТЗ.</div>
+          </div>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="mode" value="sr" />
+          <div class="mode-card">
+            <div class="mode-title">Super-Resolution</div>
+            <div class="mode-desc">Real-ESRGAN x4. ~10–25 c. Требует интернет (WASM с CDN).</div>
+          </div>
+        </label>
+      </div>
     </div>
   </div>
 
@@ -539,38 +588,50 @@
 const WORKER_CODE = `
 "use strict";
 
-/* ========== ONNX Runtime Web — Real-ESRGAN x4 Super Resolution ========== */
+/* ========== ONNX Runtime Web — Real-ESRGAN x4 Super Resolution (опционально) ========== */
 let _ort_ok = false, _session = null;
 const SR_SCALE = 4, SR_TILE = 128, SR_PAD = 8;
 
-async function _initOrt() {
+/* Локальный ort.min.js (vendor/) — self-contained, без eval.
+ * WASM-рантайм ленится с CDN (jsdelivr) только при включении SR-режима —
+ * это позволяет уложиться в лимит бандла 10 MB из ТЗ. */
+async function _initOrt(ortUrl, wasmCdn) {
   if (_ort_ok) return true;
-  var cdns = [
-    "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/",
-    "https://unpkg.com/onnxruntime-web@1.21.0/dist/"
-  ];
-  for (var i = 0; i < cdns.length; i++) {
-    try {
-      var ctrl = new AbortController();
-      var tid = setTimeout(function() { ctrl.abort(); }, 12000);
-      var r = await fetch(cdns[i] + "ort.min.js", { signal: ctrl.signal });
-      clearTimeout(tid);
-      if (!r.ok) continue;
-      var code = await r.text();
-      (0, eval)(code);
-      if (typeof ort === "undefined") continue;
-      ort.env.wasm.wasmPaths = cdns[i];
-      ort.env.wasm.numThreads = 1;
-      _ort_ok = true;
-      return true;
-    } catch(e) { continue; }
+  function _cfg() {
+    ort.env.wasm.wasmPaths = wasmCdn;
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.proxy = false;
   }
-  return false;
+  try {
+    self.importScripts(ortUrl);
+    if (typeof ort === "undefined") return false;
+    _cfg();
+    _ort_ok = true;
+    return true;
+  } catch (e) {
+    /* Fallback: CDN ort.min.js если vendor недоступен */
+    var cdns = [
+      "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/",
+      "https://unpkg.com/onnxruntime-web@1.21.0/dist/"
+    ];
+    for (var i = 0; i < cdns.length; i++) {
+      try {
+        self.importScripts(cdns[i] + "ort.min.js");
+        if (typeof ort === "undefined") continue;
+        ort.env.wasm.wasmPaths = cdns[i];
+        ort.env.wasm.numThreads = 1;
+        ort.env.wasm.proxy = false;
+        _ort_ok = true;
+        return true;
+      } catch (err) { continue; }
+    }
+    return false;
+  }
 }
 
-async function _loadModel(url) {
+async function _loadModel(url, ortUrl, wasmCdn) {
   if (_session) return true;
-  if (!await _initOrt()) return false;
+  if (!await _initOrt(ortUrl, wasmCdn)) return false;
   try {
     var p = ort.InferenceSession.create(url, {
       executionProviders: ["wasm"],
@@ -902,19 +963,22 @@ self.onmessage = async function(e) {
   var data = e.data;
   var type = data.type, taskId = data.taskId, imageData = data.imageData;
   var customParams = data.customParams, modelUrl = data.modelUrl;
+  var mode = data.mode || 'ml';         /* 'ml' (default) или 'sr' */
+  var ortUrl = data.ortUrl;
+  var wasmCdn = data.wasmCdn || "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/";
 
   if (type !== 'process') return;
 
   try {
-    /* ====== ONNX Super Resolution (приоритет) ====== */
-    if (!customParams && modelUrl) {
+    /* ====== Режим Super Resolution (опционально, по явному запросу) ====== */
+    if (mode === 'sr' && !customParams && modelUrl) {
       self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 3,
         message: 'Загрузка ONNX Runtime...' });
 
-      var ortReady = await _initOrt();
+      var ortReady = await _initOrt(ortUrl, wasmCdn);
       if (!ortReady) {
         self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 5,
-          message: 'ONNX Runtime недоступен, fallback...' });
+          message: 'ONNX Runtime недоступен, fallback в ML-режим...' });
       }
 
       if (ortReady) {
@@ -922,7 +986,7 @@ self.onmessage = async function(e) {
           message: 'Загрузка модели Real-ESRGAN (4.6 MB)...' });
       }
 
-      var ok = ortReady && await _loadModel(modelUrl);
+      var ok = ortReady && await _loadModel(modelUrl, ortUrl, wasmCdn);
       if (ok) {
         self.postMessage({ type: 'progress', taskId: taskId, status: 'analyzing', progress: 10,
           message: 'Real-ESRGAN готов' });
@@ -982,7 +1046,7 @@ self.onmessage = async function(e) {
       imageData: result2,
       params: params,
       features: features,
-      mode: 'fallback',
+      mode: 'ml',
     }, [result2.data.buffer]);
 
   } catch (err) {
@@ -1005,8 +1069,15 @@ class TaskManager extends EventTarget {
   constructor() {
     super();
 
-    /* URL модели Real-ESRGAN ONNX (4.6 MB, загружается лениво) */
+    /* URL модели Real-ESRGAN ONNX (4.6 MB, загружается только в SR-режиме) */
     this._modelUrl = new URL('./models/realesrgan-x4.onnx', document.baseURI).href;
+    /* Локальный ort.min.js (vendor/) — без eval(), штатный importScripts.
+     * WASM-рантайм (~5 MB) ленится с CDN только при включении SR-режима —
+     * экономит бандл и не замедляет первый paint. */
+    this._ortUrl   = new URL('./vendor/ort.min.js', document.baseURI).href;
+    this._wasmCdn  = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/";
+    /* Режим по умолчанию: ML-регрессор параметров (соответствует ТЗ) */
+    this._mode     = 'ml';
 
     /* Создаём Web Worker из Blob URL */
     const blob      = new Blob([WORKER_CODE], { type: 'application/javascript' });
@@ -1042,6 +1113,7 @@ class TaskManager extends EventTarget {
         resultBlob: null,
         file,
         customParams,
+        mode:          options.mode || this._mode,   /* 'ml' | 'sr' */
         outputFormat:  options.outputFormat  || (file && file.type === 'image/png' ? 'image/png' : 'image/jpeg'),
         outputQuality: options.outputQuality !== undefined ? options.outputQuality : 0.92,
         resolve,
@@ -1105,7 +1177,7 @@ class TaskManager extends EventTarget {
   /* Режим обработки (onnx | fallback) */
   getMode(taskId) {
     const task = this._tasks.get(taskId);
-    return task ? (task.mode || 'fallback') : 'fallback';
+    return task ? (task.mode || 'ml') : 'fallback';
   }
 
   /* Размер выходного изображения */
@@ -1186,7 +1258,10 @@ class TaskManager extends EventTarget {
         taskId,
         imageData,
         customParams: task.customParams,
+        mode:         task.mode || this._mode,
         modelUrl:     this._modelUrl,
+        ortUrl:       this._ortUrl,
+        wasmCdn:      this._wasmCdn,
       }, [imageData.data.buffer]);
 
     }).catch(err => {
@@ -1218,7 +1293,7 @@ class TaskManager extends EventTarget {
         task.status     = 'done';
         task.progress   = 100;
         task.params     = data.params;
-        task.mode       = data.mode || 'fallback';
+        task.mode       = data.mode || 'ml';
         task.outWidth   = data.imageData.width;
         task.outHeight  = data.imageData.height;
         task.resultBlob = blob;
@@ -1447,10 +1522,16 @@ async function handleFile(file) {
   updateProgress('Загрузка и декодирование...', 5);
   state.processingStart = Date.now();
 
+  /* Выбранный режим обработки: 'ml' (ТЗ) или 'sr' (Real-ESRGAN) */
+  const selMode = document.querySelector('input[name="mode"]:checked');
+  const mode = selMode ? selMode.value : 'ml';
+  state.currentMode = mode;
+
   try {
     const result = await manager.submit(file, {
       outputFormat,
       outputQuality: 0.92,
+      mode,
     });
     state.currentTaskId = result.taskId;
   } catch (err) {
@@ -1502,7 +1583,7 @@ function onTaskDone(taskId) {
   imgAfter.src    = resultUrl;
   downloadBtn.href = resultUrl;
 
-  const modeLabel = mode === 'onnx' ? 'Real-ESRGAN x4' : 'Basic + Lanczos';
+  const modeLabel = mode === 'onnx' ? 'Real-ESRGAN x4 (super-resolution)' : 'ML auto-enhance';
   updateProgress(modeLabel + ' — готово!', 100);
   progressBar.classList.add('success');
 

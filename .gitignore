@@ -1,7 +1,32 @@
 node_modules/
-*.map
 .DS_Store
+*.log
+
+# TypeScript build output (regenerate via `npm run build`)
+dist/
+*.map
+*.tsbuildinfo
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Browser data
 browser_data/
-*.png
-*.jpg
-*.jpeg
+
+# Local env
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# ORT WASM is lazy-loaded from CDN in SR mode; ignore local cache
+vendor/ort-wasm*.wasm
