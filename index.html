@@ -1031,7 +1031,7 @@ class TaskManager extends EventTarget {
   }
 
   /* Поставить задачу в очередь и вернуть taskId */
-  async processImage(file, customParams = null) {
+  async processImage(file, customParams = null, options = {}) {
     return new Promise((resolve, reject) => {
       const taskId = this._nextId();
 
@@ -1042,6 +1042,8 @@ class TaskManager extends EventTarget {
         resultBlob: null,
         file,
         customParams,
+        outputFormat:  options.outputFormat  || (file && file.type === 'image/png' ? 'image/png' : 'image/jpeg'),
+        outputQuality: options.outputQuality !== undefined ? options.outputQuality : 0.92,
         resolve,
         reject,
       });
@@ -1071,6 +1073,7 @@ class TaskManager extends EventTarget {
       /* Убираем из очереди */
       this._queue = this._queue.filter(id => id !== taskId);
       task.status = 'cancelled';
+      if (task.timeoutId) { clearTimeout(task.timeoutId); task.timeoutId = null; }
       this._emitStatus(taskId, 'cancelled', task.progress);
       return { success: true };
     }
@@ -1078,6 +1081,7 @@ class TaskManager extends EventTarget {
     if (task.status === 'processing' || task.status === 'analyzing') {
       /* Воркер не поддерживает прерывание — пересоздаём его */
       task.status = 'cancelled';
+      if (task.timeoutId) { clearTimeout(task.timeoutId); task.timeoutId = null; }
       this._emitStatus(taskId, 'cancelled', task.progress);
       this._restartWorker();
       return { success: true };
@@ -1123,7 +1127,7 @@ class TaskManager extends EventTarget {
 
   /* Псевдоним: submit используется в UI */
   async submit(file, options = {}) {
-    const taskId = await this.processImage(file, options.customParams || null);
+    const taskId = await this.processImage(file, options.customParams || null, options);
     return { taskId };
   }
 
@@ -1157,6 +1161,16 @@ class TaskManager extends EventTarget {
     task.status   = 'analyzing';
     task.progress = 5;
     this._emitStatus(taskId, 'analyzing', 5);
+
+    /* 30-секундный таймаут согласно ТЗ */
+    const PROCESSING_TIMEOUT_MS = 30000;
+    task.timeoutId = setTimeout(() => {
+      if (task.status === 'done' || task.status === 'error' || task.status === 'cancelled') return;
+      task.status = 'error';
+      task.error  = 'Превышено максимальное время обработки (30 с)';
+      this._emitStatus(taskId, 'error', task.progress, task.error);
+      this._restartWorker();
+    }, PROCESSING_TIMEOUT_MS);
 
     /* Декодируем файл в ImageData через OffscreenCanvas или обычный Canvas */
     this._fileToImageData(task.file).then(imageData => {
@@ -1199,7 +1213,8 @@ class TaskManager extends EventTarget {
 
     if (type === 'done') {
       /* Конвертируем ImageData → Blob → URL через Canvas */
-      this._imageDataToBlob(data.imageData).then(({ blob, url }) => {
+      this._imageDataToBlob(data.imageData, task.outputFormat, task.outputQuality).then(({ blob, url }) => {
+        if (task.timeoutId) { clearTimeout(task.timeoutId); task.timeoutId = null; }
         task.status     = 'done';
         task.progress   = 100;
         task.params     = data.params;
@@ -1216,9 +1231,10 @@ class TaskManager extends EventTarget {
     }
 
     if (type === 'error') {
+      if (task.timeoutId) { clearTimeout(task.timeoutId); task.timeoutId = null; }
       task.status = 'error';
       task.error  = data.message;
-      this._emitStatus(taskId, 'error', 0);
+      this._emitStatus(taskId, 'error', 0, data.message);
       this._busy = false;
       this._processNext();
     }
@@ -1286,7 +1302,7 @@ class TaskManager extends EventTarget {
   }
 
   /* ImageData → {blob, url} через Canvas */
-  _imageDataToBlob(imageData) {
+  _imageDataToBlob(imageData, format = 'image/jpeg', quality = 0.92) {
     return new Promise((resolve) => {
       const canvas  = document.createElement('canvas');
       canvas.width  = imageData.width;
@@ -1294,10 +1310,12 @@ class TaskManager extends EventTarget {
       const ctx = canvas.getContext('2d');
       ctx.putImageData(imageData, 0, 0);
 
+      const fmt = (format === 'image/png' || format === 'image/jpeg') ? format : 'image/jpeg';
+      const q   = fmt === 'image/jpeg' ? quality : undefined;
       canvas.toBlob(blob => {
         const url = URL.createObjectURL(blob);
         resolve({ blob, url });
-      }, 'image/jpeg', 0.92);
+      }, fmt, q);
     });
   }
 
@@ -1399,6 +1417,18 @@ async function handleFile(file) {
     return;
   }
 
+  /* HEIC работает через createImageBitmap — предупреждаем, если API недоступно */
+  const isHeic = file.type === 'image/heic' || file.type === 'image/heif'
+              || ext === 'heic' || ext === 'heif';
+  if (isHeic && typeof createImageBitmap !== 'function') {
+    showError('HEIC поддерживается только в Chrome 94+ и Safari. Используйте JPG или PNG.');
+    return;
+  }
+
+  /* PNG сохраняем в PNG (сохраняем альфа-канал), иначе — JPEG */
+  const isPng = file.type === 'image/png' || ext === 'png';
+  const outputFormat = isPng ? 'image/png' : 'image/jpeg';
+
   hideError();
   resetUI();
 
@@ -1419,7 +1449,7 @@ async function handleFile(file) {
 
   try {
     const result = await manager.submit(file, {
-      outputFormat:  'image/jpeg',
+      outputFormat,
       outputQuality: 0.92,
     });
     state.currentTaskId = result.taskId;
@@ -1524,9 +1554,11 @@ reprocessBtn.addEventListener('click', async () => {
   }
 
   try {
+    const origName = (state.originalFile.name || '').toLowerCase();
+    const isPng = state.originalFile.type === 'image/png' || origName.endsWith('.png');
     const result = await manager.submit(state.originalFile, {
       customParams,
-      outputFormat:  'image/jpeg',
+      outputFormat:  isPng ? 'image/png' : 'image/jpeg',
       outputQuality: 0.92,
     });
     state.currentTaskId = result.taskId;
@@ -1716,6 +1748,42 @@ function getImageDimensions(src) {
     img.src    = src;
   });
 }
+
+/* ============================================================
+   Публичный API согласно ТЗ VK Education
+   Доступно через window.enhancer из внешних скриптов.
+   Методы:
+     submitTask(file, options)  → Promise<{ taskId }>
+     getStatus(taskId)          → { status, progress }
+     cancelTask(taskId)         → { success }
+     getResult(taskId)          → { blob, url } | null
+   События:
+     on('statusChange', handler) → unsubscribe()
+============================================================ */
+window.enhancer = {
+  submitTask(file, options = {}) {
+    return manager.submit(file, options);
+  },
+  getStatus(taskId) {
+    return manager.getStatus(taskId);
+  },
+  cancelTask(taskId) {
+    return manager.cancel(taskId);
+  },
+  getResult(taskId) {
+    const task = manager._tasks.get(taskId);
+    if (!task || !task.resultBlob) return null;
+    return { blob: task.resultBlob, url: task.resultUrl };
+  },
+  on(event, handler) {
+    if (event !== 'statusChange') {
+      throw new Error('Поддерживается только событие "statusChange"');
+    }
+    const listener = (e) => handler(e.detail);
+    manager.addEventListener('taskStatusChanged', listener);
+    return () => manager.removeEventListener('taskStatusChanged', listener);
+  },
+};
 </script>
 
 </body>
