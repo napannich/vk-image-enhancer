@@ -1,0 +1,66 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Curator Feedback</title>
+<style>
+@page { size: A4; margin: 20mm 18mm; }
+body {
+  font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 11pt; line-height: 1.55; color: #1a1a1a; max-width: 780px; margin: 30px auto; padding: 0 20px;
+}
+h1 { font-size: 20pt; margin: 0 0 18px; border-bottom: 2px solid #0077ff; padding-bottom: 8px; }
+h2 { font-size: 15pt; margin: 24px 0 10px; color: #004a99; page-break-after: avoid; }
+h3 { font-size: 13pt; margin: 18px 0 8px; color: #0055aa; page-break-after: avoid; }
+p, li { margin: 6px 0; }
+ul, ol { padding-left: 22px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; page-break-inside: avoid; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f5ff; font-weight: 600; }
+code { background: #f4f4f8; padding: 1px 6px; border-radius: 3px; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.92em; }
+pre { background: #f6f8fa; border: 1px solid #e4e8ee; padding: 12px 14px; border-radius: 6px; font-size: 9.5pt; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: transparent; padding: 0; }
+blockquote { border-left: 3px solid #0077ff; padding: 4px 12px; margin: 12px 0; color: #444; background: #f8faff; }
+hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
+strong { color: #0a0a0a; }
+</style>
+</head><body><h1>Отзыв куратора от VK Education</h1>
+<p><em>(Драфт для заполнения куратором учебной группы Уч_П95-11, VK Education)</em></p>
+<hr />
+<h2>Отзыв куратора о прохождении производственной (проектно-технологической) практики</h2>
+<p><strong>Обучающийся:</strong> Напалков Андрей
+<strong>Образовательная программа:</strong> магистратура, Университет ИТМО
+<strong>Период практики:</strong> 16.02.2026 — 15.04.2026 (6 з.е.)
+<strong>База практики:</strong> VK Education (ООО «В Контакте»)
+<strong>Учебная группа:</strong> Уч_П95-11
+<strong>Проектная задача:</strong> «ML-модель для улучшения изображений в браузере»</p>
+<hr />
+<p>За время прохождения практики Напалков Андрей выполнил все задачи, предусмотренные индивидуальным планом и техническим заданием проектной задачи VK Education.</p>
+<p><strong>Выполненные задачи:</strong>
+- проведён анализ технического задания и зафиксированы функциональные и нефункциональные требования;
+- спроектирована и реализована архитектура клиентского веб-приложения с ML-инференсом в браузере;
+- реализован публичный API согласно рекомендациям ТЗ (методы постановки задачи, получения статуса, прерывания, получения результата, а также событие изменения статуса);
+- обеспечена поддержка всех требуемых форматов (JPG, PNG, HEIC, BMP) и обработка изображений до 15 Мпикс;
+- реализованы механизмы надёжности: жёсткий timeout 30 с, graceful fallback при недоступности ML-runtime;
+- приложение развёрнуто на публичном хостинге и протестировано во всех массовых браузерах.</p>
+<p><strong>Освоенные технологии:</strong>
+ONNX Runtime Web (WASM), Real-ESRGAN, TensorFlow.js, Web Workers, Transferable Objects, Canvas API, OffscreenCanvas, TypeScript (strict), tile-based inference, квантизация ML-моделей, GitHub Pages.</p>
+<p><strong>Архитектурные и инженерные решения:</strong>
+- tile-based inference (тайлы 128×128 с padding 8 пикселей) для фиксированного бюджета памяти независимо от размера входа;
+- inline Web Worker через Blob URL, обеспечивающий работу приложения с любого статического хостинга и протокола file://;
+- двухуровневая стратегия обработки — ONNX-инференс как основной путь и алгоритмический пайплайн (auto-levels по перцентилям p5/p95, Unsharp Mask, Lanczos 2x апскейл) как fallback;
+- сохранение альфа-канала для PNG-изображений;
+- централизованный менеджер задач (TaskManager) с подпиской на события и управлением очередью.</p>
+<p><strong>Объём разработки:</strong>
+- ~1700 строк кода в главном модуле (UI + TaskManager + Web Worker);
+- ~800 строк типизированного TypeScript-кода в модульной сборке (src/);
+- итоговый объём бандла ~5 МБ (при лимите 10 МБ);
+- 8 содержательных коммитов с последовательной историей развития решения.</p>
+<p><strong>Метрики производительности (результат апробации):</strong>
+- среднее время обработки изображения 5 Мпк: 3–7 секунд (в зависимости от браузера и CPU);
+- все тестовые сценарии укладываются в ограничение 30 с;
+- поддержка четырёх форматов подтверждена ручным тестированием.</p>
+<p>Проектная задача сдана в полном объёме, решение размещено на публичном хостинге:
+https://napannich.github.io/vk-image-enhancer</p>
+<p>Исходный код открыт: https://github.com/napannich/vk-image-enhancer</p>
+<hr />
+<p><strong>Заключение:</strong> производственная практика выполнена Напалковым Андреем в полном объёме, качественно и в установленный срок. Освоенные компетенции соответствуют требованиям проектной задачи и трекам образовательной программы «Искусственный интеллект» и «Человеко-ориентированные решения». Рекомендуемая оценка: <strong>«отлично»</strong>.</p>
+<hr />
+<p><em>Куратор от VK Education:</em> <strong><em>_</em></strong><strong><em>_</em></strong><em> / <strong><em>_</em></strong><strong><em>_</em></strong></em> /
+<em>Дата:</em> __.04.2026</p></body></html>

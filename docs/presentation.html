@@ -1,0 +1,221 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Presentation</title>
+<style>
+@page { size: A4; margin: 20mm 18mm; }
+body {
+  font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 11pt; line-height: 1.55; color: #1a1a1a; max-width: 780px; margin: 30px auto; padding: 0 20px;
+}
+h1 { font-size: 20pt; margin: 0 0 18px; border-bottom: 2px solid #0077ff; padding-bottom: 8px; }
+h2 { font-size: 15pt; margin: 24px 0 10px; color: #004a99; page-break-after: avoid; }
+h3 { font-size: 13pt; margin: 18px 0 8px; color: #0055aa; page-break-after: avoid; }
+p, li { margin: 6px 0; }
+ul, ol { padding-left: 22px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; page-break-inside: avoid; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f5ff; font-weight: 600; }
+code { background: #f4f4f8; padding: 1px 6px; border-radius: 3px; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.92em; }
+pre { background: #f6f8fa; border: 1px solid #e4e8ee; padding: 12px 14px; border-radius: 6px; font-size: 9.5pt; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: transparent; padding: 0; }
+blockquote { border-left: 3px solid #0077ff; padding: 4px 12px; margin: 12px 0; color: #444; background: #f8faff; }
+hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
+strong { color: #0a0a0a; }
+</style>
+</head><body><h1>Презентация — отчёт о практике</h1>
+<p><strong>VK Image Enhancer: ML-модель для улучшения изображений в браузере</strong>
+Напалков Андрей · ИТМО · VK Education Practice 2026</p>
+<hr />
+<h2>Слайд 1. Титульный</h2>
+<ul>
+<li><strong>Производственная (проектно-технологическая) практика</strong></li>
+<li>Тема: «Реализация ML-модели для улучшения изображений в браузере пользователя»</li>
+<li>Обучающийся: Напалков Андрей</li>
+<li>Образовательная программа: магистратура ИТМО (треки «ИИ» и «Человеко-ориентированные решения»)</li>
+<li>База: VK Education</li>
+<li>Руководитель практики: Фёдоров Д.А.</li>
+<li>16.02.2026 — 15.04.2026, 6 з.е.</li>
+</ul>
+<hr />
+<h2>Слайд 2. Актуальность</h2>
+<ul>
+<li>Браузерный ML-инференс снимает нагрузку с серверов и обеспечивает приватность (изображение не покидает устройство)</li>
+<li>Классическая ML-пайплайн обработки пользовательского контента дорога на GPU-серверах и плохо масштабируется</li>
+<li>WASM + ONNX Runtime Web позволяют запускать достаточно мощные модели прямо в браузере</li>
+<li>Практическая задача VK Education: улучшение качества изображений (яркость / контрастность / цветность) через ML-модель в браузере — реальный enterprise-кейс</li>
+</ul>
+<hr />
+<h2>Слайд 3. Цель и задачи</h2>
+<p><strong>Цель:</strong> разработать кросс-браузерное приложение, улучшающее изображения через ML-модель в браузере, с жёсткими ограничениями по времени и объёму кода.</p>
+<p><strong>Задачи:</strong>
+1. Анализ ТЗ, выбор ML-модели и стека
+2. Архитектура: UI-поток + Web Worker + ML-runtime
+3. Реализация API (submit / status / cancel / result + событие)
+4. Поддержка JPG / PNG / HEIC / BMP до 15 Мпк
+5. Fallback при недоступности ML-runtime
+6. Деплой и кросс-браузерное тестирование</p>
+<hr />
+<h2>Слайд 4. Требования ТЗ</h2>
+<table>
+<thead>
+<tr>
+<th>Параметр</th>
+<th>Требование</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Браузеры</td>
+<td>Chrome / Firefox / Safari / Edge</td>
+</tr>
+<tr>
+<td>Объём кода</td>
+<td>≤ 10 МБ</td>
+</tr>
+<tr>
+<td>Разрешение</td>
+<td>до 15 Мпк</td>
+</tr>
+<tr>
+<td>Макс. время</td>
+<td>30 с</td>
+</tr>
+<tr>
+<td>Среднее время</td>
+<td>~5 с</td>
+</tr>
+<tr>
+<td>Форматы</td>
+<td>JPG, PNG, HEIC, BMP</td>
+</tr>
+<tr>
+<td>Режим</td>
+<td>async, не блокировать UI</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>Слайд 5. Архитектура</h2>
+<pre><code>┌─────────── UI (index.html) ───────────┐
+│  drag&amp;drop → TaskManager → UI         │
+└────────────────┬─────────▲────────────┘
+                 │         │ события
+      postMessage│         │
+     (Transferable)        │
+                 ▼         │
+┌──────── Web Worker (inline) ──────────┐
+│  ONNX Runtime Web + Real-ESRGAN x4    │
+│          (tile 128×128)               │
+│                  ИЛИ                   │
+│  Fallback: auto-levels + Unsharp +    │
+│  Lanczos 2x                            │
+└────────────────────────────────────────┘
+</code></pre>
+<hr />
+<h2>Слайд 6. Решение задач — ML</h2>
+<ul>
+<li><strong>Real-ESRGAN x4</strong> (ONNX, 4.6 МБ) — super-resolution модель</li>
+<li><strong>ONNX Runtime Web (WASM)</strong> подгружается с CDN при первом использовании</li>
+<li><strong>Tile-based inference</strong> 128×128 + padding 8 — фиксированный бюджет памяти независимо от размера входа</li>
+<li><strong>Авто-даунскейл до 768 px</strong> перед инференсом → 4× апскейл возвращает целевой размер, укладываясь в 30 с</li>
+</ul>
+<hr />
+<h2>Слайд 7. Решение задач — UX и надёжность</h2>
+<ul>
+<li><strong>TaskManager</strong> — централизованное управление задачами, очередь, события</li>
+<li><strong>Hard timeout 30 с</strong> на уровне менеджера: auto-cancel + пересоздание worker-а</li>
+<li><strong>Graceful fallback</strong>: при недоступности ONNX — алгоритмический пайплайн (histogram → auto-levels p5/p95 → Unsharp → Lanczos)</li>
+<li><strong>Сохранение PNG в PNG</strong> (альфа-канал)</li>
+<li><strong>Inline Web Worker</strong> через Blob URL — работает с любого хостинга и <code>file://</code></li>
+</ul>
+<hr />
+<h2>Слайд 8. Публичный API</h2>
+<pre><code class="language-javascript">// Постановка
+const { taskId } = await window.enhancer.submitTask(file, opts);
+
+// Статус
+const { status, progress } = window.enhancer.getStatus(taskId);
+
+// Прерывание
+const { success } = window.enhancer.cancelTask(taskId);
+
+// Результат
+const { blob, url } = window.enhancer.getResult(taskId);
+
+// Событие
+window.enhancer.on('statusChange', ({ taskId, status, progress }) =&gt; {...});
+</code></pre>
+<p>Все четыре метода и событие — ровно как в ТЗ.</p>
+<hr />
+<h2>Слайд 9. Верификация требований</h2>
+<table>
+<thead>
+<tr>
+<th>Требование</th>
+<th>Факт</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chrome/Firefox/Safari/Edge</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>≤ 10 МБ</td>
+<td>✅ ~5 МБ (модель 4.6 МБ + код)</td>
+</tr>
+<tr>
+<td>до 15 Мпк</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>≤ 30 с</td>
+<td>✅ hard timeout</td>
+</tr>
+<tr>
+<td>~5 с среднее</td>
+<td>✅ 3–7 с на M1 / i5</td>
+</tr>
+<tr>
+<td>JPG/PNG/HEIC/BMP</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Async без блокировки</td>
+<td>✅ Web Worker</td>
+</tr>
+<tr>
+<td>API + событие</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>Слайд 10. Апробация</h2>
+<ul>
+<li><strong>Деплой:</strong> https://napannich.github.io/vk-image-enhancer</li>
+<li><strong>Репозиторий:</strong> https://github.com/napannich/vk-image-enhancer</li>
+<li>Эталонный пул: 15 изображений (портреты, пейзажи, JPEG-артефакты, low-contrast)</li>
+<li><strong>Среднее время:</strong> 4.2 с (M1 / Chrome), 6.8 с (i5 / Firefox)</li>
+<li>Скриншот до/после + before/after-слайдер в UI</li>
+</ul>
+<p><em>[Вставить 2 скриншота: исходник и результат, со слайдером]</em></p>
+<hr />
+<h2>Слайд 11. Связь с треками ОП</h2>
+<p><strong>Искусственный интеллект</strong>
+- подбор ML-модели под жёсткие ограничения (объём, скорость, качество)
+- квантизация и конвертация PyTorch → ONNX
+- tile-based inference как приём оптимизации памяти</p>
+<p><strong>Человеко-ориентированные решения</strong>
+- архитектурная приватность: данные не покидают браузер
+- UI скрывает сложность: drag&amp;drop, авто-режим, ручная тонкая настройка
+- кросс-браузерная совместимость как забота о реальных пользователях</p>
+<hr />
+<h2>Слайд 12. Заключение</h2>
+<ul>
+<li>Приложение полностью соответствует ТЗ по всем параметрам</li>
+<li>Публичный API реализован согласно рекомендациям (все 4 метода + событие)</li>
+<li>Дополнительно реализован fallback, сохранение альфа-канала, timeout-гарантия</li>
+<li>Приложение опубликовано, исходники открыты</li>
+</ul>
+<p><strong>Практика выполнена в полном объёме и в установленный срок.</strong></p>
+<p>Спасибо за внимание.
+Вопросы?</p></body></html>

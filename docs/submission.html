@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Submission</title>
+<style>
+@page { size: A4; margin: 20mm 18mm; }
+body {
+  font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 11pt; line-height: 1.55; color: #1a1a1a; max-width: 780px; margin: 30px auto; padding: 0 20px;
+}
+h1 { font-size: 20pt; margin: 0 0 18px; border-bottom: 2px solid #0077ff; padding-bottom: 8px; }
+h2 { font-size: 15pt; margin: 24px 0 10px; color: #004a99; page-break-after: avoid; }
+h3 { font-size: 13pt; margin: 18px 0 8px; color: #0055aa; page-break-after: avoid; }
+p, li { margin: 6px 0; }
+ul, ol { padding-left: 22px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; page-break-inside: avoid; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f5ff; font-weight: 600; }
+code { background: #f4f4f8; padding: 1px 6px; border-radius: 3px; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.92em; }
+pre { background: #f6f8fa; border: 1px solid #e4e8ee; padding: 12px 14px; border-radius: 6px; font-size: 9.5pt; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: transparent; padding: 0; }
+blockquote { border-left: 3px solid #0077ff; padding: 4px 12px; margin: 12px 0; color: #444; background: #f8faff; }
+hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
+strong { color: #0a0a0a; }
+</style>
+</head><body><h1>Пакет для сдачи практики (15.04.2026)</h1>
+<h2>Куда сдаём</h2>
+<p><strong>Google Form (раздел 6. Проектно-технологическая практика):</strong>
+https://forms.gle/r72K4nDXnrvLdWju7</p>
+<p><strong>Таблица со статусом:</strong>
+https://docs.google.com/spreadsheets/d/1fOA7vkcNxqDfcP3zTZVg5aX4Qg6ziFSBROKK-IujgzI/</p>
+<p><strong>Руководитель практики:</strong> Фёдоров Д.А. — <code>Dafedorov@itmo.ru</code>, TG <code>@dmitriy_a_fedorov</code></p>
+<h2>Что сдаём</h2>
+<table>
+<thead>
+<tr>
+<th>Артефакт</th>
+<th>Файл / ссылка</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Отчёт о практике</td>
+<td><code>docs/report.md</code> (экспортировать в PDF через Typora / Pandoc)</td>
+</tr>
+<tr>
+<td>Презентация</td>
+<td><code>docs/presentation.md</code> (перенести в Google Slides / Keynote)</td>
+</tr>
+<tr>
+<td>Отзыв куратора</td>
+<td><code>docs/curator_feedback.md</code> (подписать куратором VK Education)</td>
+</tr>
+<tr>
+<td>Репозиторий проекта</td>
+<td>https://github.com/napannich/vk-image-enhancer</td>
+</tr>
+<tr>
+<td>Деплой проекта</td>
+<td>https://napannich.github.io/vk-image-enhancer</td>
+</tr>
+</tbody>
+</table>
+<h2>Чек-лист перед отправкой формы</h2>
+<ul>
+<li>[ ] В VK Education пройден курс «ML-модель для улучшения изображений» (Уч_П95-11, преподаватель Егор Глуховченко)</li>
+<li>[ ] На платформе VK Education загружено решение задания 1 (ссылка на репозиторий)</li>
+<li>[ ] Куратор VK Education выдал отзыв по драфту из <code>curator_feedback.md</code></li>
+<li>[ ] Отчёт экспортирован в PDF</li>
+<li>[ ] Презентация загружена в Google Slides / Keynote, получена публичная ссылка</li>
+<li>[ ] Вся информация сохранена как PDF-архив локально</li>
+</ul>
+<h2>Порядок действий на сегодня</h2>
+<ol>
+<li>Зайти на VK Education → пройти финальный урок, отправить решение (ссылка на GitHub-репо)</li>
+<li>Написать куратору VK (Егор Глуховченко / представитель VK Education): «Прошу выдать отзыв по прохождению практики. Прикрепляю шаблон.» → приложить <code>curator_feedback.md</code></li>
+<li>Экспортировать <code>docs/report.md</code> в PDF: <code>pandoc docs/report.md -o docs/report.pdf --pdf-engine=xelatex</code> (или через Typora/Marked)</li>
+<li>Перенести <code>docs/presentation.md</code> в Google Slides (12 слайдов по разделителям <code>---</code>)</li>
+<li>Заполнить Google Form: https://forms.gle/r72K4nDXnrvLdWju7
+   - ФИО, группа, ОП
+   - Ссылка на репозиторий: https://github.com/napannich/vk-image-enhancer
+   - Ссылка на деплой: https://napannich.github.io/vk-image-enhancer
+   - Ссылка на отчёт (PDF в Google Drive)
+   - Ссылка на презентацию (Google Slides)
+   - Ссылка на отзыв куратора</li>
+<li>Написать Фёдорову Д.А. в TG: «Отправил практику в форму. Сдача: проект <code>vk-image-enhancer</code>, ссылка на деплой и репозиторий в форме. Готов к защите/докладу.»</li>
+<li>Проверить статус в таблице через 24 часа</li>
+</ol>
+<h2>Если куратор не успевает выдать отзыв сегодня</h2>
+<ul>
+<li>Написать Фёдорову Д.А. заранее, предупредить: отзыв придёт позднее</li>
+<li>Сдать всё остальное в срок</li>
+<li>Отзыв дозаливается в ту же форму позже</li>
+</ul></body></html>

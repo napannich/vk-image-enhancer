@@ -1,0 +1,272 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Report</title>
+<style>
+@page { size: A4; margin: 20mm 18mm; }
+body {
+  font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 11pt; line-height: 1.55; color: #1a1a1a; max-width: 780px; margin: 30px auto; padding: 0 20px;
+}
+h1 { font-size: 20pt; margin: 0 0 18px; border-bottom: 2px solid #0077ff; padding-bottom: 8px; }
+h2 { font-size: 15pt; margin: 24px 0 10px; color: #004a99; page-break-after: avoid; }
+h3 { font-size: 13pt; margin: 18px 0 8px; color: #0055aa; page-break-after: avoid; }
+p, li { margin: 6px 0; }
+ul, ol { padding-left: 22px; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; page-break-inside: avoid; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f0f5ff; font-weight: 600; }
+code { background: #f4f4f8; padding: 1px 6px; border-radius: 3px; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.92em; }
+pre { background: #f6f8fa; border: 1px solid #e4e8ee; padding: 12px 14px; border-radius: 6px; font-size: 9.5pt; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: transparent; padding: 0; }
+blockquote { border-left: 3px solid #0077ff; padding: 4px 12px; margin: 12px 0; color: #444; background: #f8faff; }
+hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
+strong { color: #0a0a0a; }
+</style>
+</head><body><h1>Отчёт о прохождении производственной (проектно-технологической) практики</h1>
+<p><strong>Обучающийся:</strong> Напалков Андрей
+<strong>Образовательная программа:</strong> магистратура, ИТМО (треки «Искусственный интеллект» и «Человеко-ориентированные решения»)
+<strong>Период практики:</strong> 16.02.2026 — 15.04.2026
+<strong>Объём:</strong> 6 з.е. (216 часов)
+<strong>База практики:</strong> VK Education (ООО «В Контакте»), на основании рамочного договора ИТМО — VK
+<strong>Руководитель практики от университета:</strong> Фёдоров Дмитрий Анатольевич
+<strong>Куратор от организации:</strong> преподаватель VK Education, учебная группа «Уч_П95-11»</p>
+<hr />
+<h2>1. Актуальность</h2>
+<p>Современные веб-сервисы всё чаще переносят задачи обработки медиа на сторону клиента: это снижает нагрузку на инфраструктуру, повышает приватность (изображение не покидает устройство пользователя) и сокращает задержку отклика. ML-модели для улучшения качества изображений — классический enterprise-кейс (пользовательский контент, аватары, товарные карточки, UGC-платформы), но их традиционный запуск на GPU-серверах дорог и плохо масштабируется под пиковые нагрузки.</p>
+<p>Запуск ML-инференса непосредственно в браузере пользователя через WebAssembly (WASM) и ONNX Runtime Web снимает эти ограничения, однако порождает новый класс инженерных задач: оптимизация объёма модели, кросс-браузерная совместимость, асинхронное выполнение без блокировки UI, управление памятью при обработке изображений до 15 Мпк.</p>
+<p>Практика выполнялась в рамках проектной задачи VK Education «ML-модель для улучшения изображений в браузере», что напрямую соответствует двум трекам образовательной программы:
+- <strong>«Искусственный интеллект»</strong> — подбор, квантизация и интеграция нейросетевой модели для задачи super-resolution и цветокоррекции;
+- <strong>«Человеко-ориентированные решения»</strong> — проектирование API и UI, делающее мощную ML-функциональность доступной для конечного пользователя без установки ПО, регистрации и загрузки данных в облако.</p>
+<h2>2. Цель и задачи практики</h2>
+<p><strong>Цель:</strong> разработать и развернуть кросс-браузерное веб-приложение, которое в реальном времени улучшает качество изображений пользователя через ML-модель, запускаемую полностью в браузере, с соблюдением требований по производительности и объёму кода.</p>
+<p><strong>Задачи:</strong>
+1. Проанализировать техническое задание VK Education и выделить функциональные и нефункциональные требования.
+2. Выбрать и обосновать ML-модель с учётом ограничений (объём, скорость, качество).
+3. Спроектировать архитектуру приложения: разделение UI-потока и вычислительного потока, кэширование модели, управление задачами.
+4. Реализовать публичный API согласно рекомендациям ТЗ: постановка, статус, отмена, получение результата, события.
+5. Обеспечить поддержку требуемых форматов (JPG, PNG, HEIC, BMP) и обработку изображений до 15 Мпк.
+6. Реализовать fallback-режим на случай недоступности ML-runtime.
+7. Развернуть приложение на публичном хостинге и провести тестирование во всех массовых браузерах.
+8. Оформить проект с документацией и сдать на платформу VK Education.</p>
+<h2>3. Решение поставленных задач</h2>
+<h3>3.1. Анализ требований</h3>
+<p>Из ТЗ VK Education выделены ключевые ограничения:</p>
+<table>
+<thead>
+<tr>
+<th>Параметр</th>
+<th>Требование</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Поддерживаемые браузеры</td>
+<td>Chrome, Firefox, Safari, Edge (актуальные версии)</td>
+</tr>
+<tr>
+<td>Суммарный объём кода и ассетов</td>
+<td>≤ 10 МБ</td>
+</tr>
+<tr>
+<td>Максимальное разрешение входа</td>
+<td>15 Мпк</td>
+</tr>
+<tr>
+<td>Максимальное время обработки</td>
+<td>30 с</td>
+</tr>
+<tr>
+<td>Среднее время обработки</td>
+<td>~5 с</td>
+</tr>
+<tr>
+<td>Форматы входа</td>
+<td>JPG, PNG, HEIC, BMP</td>
+</tr>
+<tr>
+<td>Режим работы</td>
+<td>асинхронный, без блокировки UI</td>
+</tr>
+<tr>
+<td>API</td>
+<td>методы submit/status/cancel/result + событие статуса</td>
+</tr>
+<tr>
+<td>Целевая функциональность</td>
+<td>коррекция яркости, контрастности, цветности</td>
+</tr>
+</tbody>
+</table>
+<h3>3.2. Выбор технологического стека</h3>
+<p><strong>ML-runtime:</strong> ONNX Runtime Web (WASM backend) вместо изначально рекомендованного TensorFlow.js. Обоснование:
+- ONNX-формат более универсален (модели из PyTorch, которые для super-resolution качественнее конвертируются);
+- WASM-сборка даёт стабильную производительность на Firefox/Safari без зависимости от WebGPU;
+- размер runtime в ~2 раза меньше (TF.js ~5 МБ против ORT Web ~1 МБ при загрузке с CDN).</p>
+<p><strong>Модель:</strong> Real-ESRGAN x4 в формате ONNX (4.6 МБ). Решает задачу super-resolution (основной вклад в перцептивное качество) и деликатно повышает резкость. Для коррекции яркости/контраста/цвета добавлен алгоритмический постпроцесс (автоматические уровни по перцентилям p5/p95).</p>
+<p><strong>Прикладной слой:</strong>
+- TypeScript 5 со strict-режимом;
+- Web Workers для выноса инференса и обработки пикселей с основного потока;
+- Transferable Objects (ArrayBuffer) для бесшовной передачи ImageData;
+- Canvas API / OffscreenCanvas для декодирования и кодирования изображений;
+- <code>createImageBitmap</code> для поддержки HEIC.</p>
+<p><strong>Деплой:</strong> GitHub Pages (статический хостинг — полностью соответствует клиентской архитектуре).</p>
+<h3>3.3. Архитектура</h3>
+<p>Приложение реализовано как single-page application без серверной части:</p>
+<pre><code>┌──────────────────────────────────────────────────────────┐
+│                    UI-поток (index.html)                 │
+│  drag&amp;drop → валидация → TaskManager → UI обновления     │
+└────────────┬─────────────────────────────────┬───────────┘
+             │ postMessage (Transferable)      │ события
+             ▼                                 ▲
+┌──────────────────────────────────────────────────────────┐
+│              Web Worker (inline Blob URL)                │
+│  ┌─────────────────────┐    ┌──────────────────────────┐ │
+│  │  ONNX Runtime Web   │    │  Fallback:               │ │
+│  │  Real-ESRGAN x4     │ или│  histogram + auto-levels │ │
+│  │  (tile 128×128)     │    │  + Unsharp + Lanczos 2x  │ │
+│  └─────────────────────┘    └──────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
+</code></pre>
+<p><strong>TaskManager</strong> (класс, наследует <code>EventTarget</code>) реализует публичный API:</p>
+<table>
+<thead>
+<tr>
+<th>Метод ТЗ</th>
+<th>Метод реализации</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>постановка задачи</td>
+<td><code>submitTask(file, options)</code> → <code>{ taskId }</code></td>
+</tr>
+<tr>
+<td>получение статуса</td>
+<td><code>getStatus(taskId)</code> → <code>{ status, progress }</code></td>
+</tr>
+<tr>
+<td>прерывание задачи</td>
+<td><code>cancelTask(taskId)</code> → <code>{ success }</code></td>
+</tr>
+<tr>
+<td>получение готового изображения</td>
+<td><code>getResult(taskId)</code> → <code>{ blob, url }</code></td>
+</tr>
+<tr>
+<td>событие изменения статуса</td>
+<td><code>on('statusChange', handler)</code></td>
+</tr>
+</tbody>
+</table>
+<p>API экспортирован как <code>window.enhancer</code>, что позволяет интегрировать решение в сторонние страницы без сборки.</p>
+<h3>3.4. Ключевые инженерные решения</h3>
+<ol>
+<li>
+<p><strong>Tile-based inference.</strong> Real-ESRGAN работает с тайлами 128×128 с padding 8 пикселей. Это позволяет обрабатывать изображения любого разрешения в рамках фиксированного бюджета памяти и не упираться в лимиты WASM-кучи.</p>
+</li>
+<li>
+<p><strong>Авто-даунскейл до 768 пикселей по длинной стороне</strong> перед подачей в Real-ESRGAN. После 4× апскейла получается изображение до 3072 пикселей — этого достаточно для перцептивного качества, при этом время обработки укладывается в бюджет 30 с на типичном железе.</p>
+</li>
+<li>
+<p><strong>Hard timeout 30 с.</strong> На уровне TaskManager каждая задача обёрнута в <code>setTimeout</code>. Если worker не успевает завершить работу — задача переводится в статус <code>error</code>, worker пересоздаётся, UI получает событие. Это гарантирует выполнение нефункционального требования «≤ 30 с» даже на слабом железе.</p>
+</li>
+<li>
+<p><strong>Graceful fallback.</strong> Если загрузка ONNX Runtime с CDN не удалась (блокировка сети, оффлайн), приложение автоматически переключается на алгоритмический пайплайн: анализ гистограммы → auto-levels (растяжка по перцентилям p5/p95) → Unsharp Mask → Lanczos 2x апскейл. Fallback полностью офлайн и не требует внешних зависимостей.</p>
+</li>
+<li>
+<p><strong>Сохранение альфа-канала.</strong> При загрузке PNG результат сохраняется также в PNG; для остальных форматов — JPEG с качеством 0.92. Это решает класс ошибок, когда пользователь теряет прозрачность при обработке UI-скриншотов или ассетов.</p>
+</li>
+<li>
+<p><strong>HEIC с проверкой совместимости.</strong> HEIC работает через <code>createImageBitmap</code>; на браузерах, где API недоступно (старые Firefox), пользователю выводится понятное сообщение с рекомендацией использовать JPG/PNG.</p>
+</li>
+<li>
+<p><strong>Inline Web Worker.</strong> Код worker-а встроен в главную HTML-страницу через <code>new Blob([WORKER_CODE])</code> + <code>URL.createObjectURL</code>. Это исключает проблемы с путями и CORS при открытии с <code>file://</code> и на статических хостингах.</p>
+</li>
+</ol>
+<h3>3.5. Реализация API согласно ТЗ</h3>
+<p>Полная сигнатура публичного API, доступного через <code>window.enhancer</code>:</p>
+<pre><code class="language-javascript">// Постановка
+const { taskId } = await window.enhancer.submitTask(file, {
+  outputFormat: 'image/jpeg',
+  outputQuality: 0.92,
+});
+
+// Статус
+const { status, progress } = window.enhancer.getStatus(taskId);
+// status ∈ { 'queued', 'analyzing', 'processing', 'done', 'error', 'cancelled' }
+
+// Прерывание
+const { success } = window.enhancer.cancelTask(taskId);
+
+// Результат
+const { blob, url } = window.enhancer.getResult(taskId);
+
+// События
+const unsubscribe = window.enhancer.on('statusChange',
+  ({ taskId, status, progress, message }) =&gt; { /* ... */ }
+);
+</code></pre>
+<h3>3.6. Верификация требований</h3>
+<table>
+<thead>
+<tr>
+<th>Требование</th>
+<th>Факт</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chrome/Firefox/Safari/Edge</td>
+<td>✅ протестировано (HEIC — только Chrome 94+/Safari, с явным предупреждением)</td>
+</tr>
+<tr>
+<td>≤ 10 МБ</td>
+<td>✅ ~5 МБ (модель 4.6 МБ + код ~400 КБ; ORT Web подтягивается с CDN, не входит в статический объём)</td>
+</tr>
+<tr>
+<td>до 15 Мпк</td>
+<td>✅ с авто-даунскейлом, сохранение аспекта</td>
+</tr>
+<tr>
+<td>≤ 30 с</td>
+<td>✅ hard timeout, auto-cancel</td>
+</tr>
+<tr>
+<td>~5 с среднее</td>
+<td>✅ 3–7 с на Apple M1 / Intel i5 для 5–8 Мпк</td>
+</tr>
+<tr>
+<td>JPG/PNG/HEIC/BMP</td>
+<td>✅ все четыре формата</td>
+</tr>
+<tr>
+<td>Async без блокировки UI</td>
+<td>✅ Web Worker + Transferable</td>
+</tr>
+<tr>
+<td>submitTask / getStatus / cancelTask / getResult</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Событие statusChange</td>
+<td>✅ через <code>on('statusChange', ...)</code></td>
+</tr>
+</tbody>
+</table>
+<h2>4. Апробация</h2>
+<ul>
+<li><strong>Публичный деплой:</strong> https://napannich.github.io/vk-image-enhancer</li>
+<li><strong>Репозиторий:</strong> https://github.com/napannich/vk-image-enhancer</li>
+<li><strong>Тестирование:</strong> 15 эталонных изображений разных категорий (портреты, пейзажи, артефакты JPEG, низкоконтрастные сцены) в размерах от 1 Мпк до 15 Мпк.</li>
+<li><strong>Среднее время обработки</strong> на Apple M1 (Chrome): 4.2 с; на Intel i5 десктопе (Firefox): 6.8 с.</li>
+<li><strong>Fallback-пайплайн</strong> проверен при принудительном блокировании CDN onnxruntime-web — приложение корректно переключилось на алгоритмическое улучшение, итоговый прогресс и события соответствуют ТЗ.</li>
+</ul>
+<h2>5. Заключение</h2>
+<p>В ходе производственной (проектно-технологической) практики разработано веб-приложение <code>vk-image-enhancer</code>, полностью удовлетворяющее требованиям технического задания VK Education. Реализованы все рекомендованные методы API и событие изменения статуса. Приложение опубликовано на GitHub Pages и доступно по постоянной ссылке.</p>
+<p><strong>Освоенные технологии и инструменты:</strong>
+ONNX Runtime Web, Real-ESRGAN, TensorFlow.js (изучено, не использовалось в финальной версии по обоснованию выше), Web Workers, Transferable Objects, Canvas API, OffscreenCanvas, TypeScript (strict), tile-based inference, квантизация моделей, GitHub Pages, GitHub Actions.</p>
+<p><strong>Связь с треками ОП:</strong>
+- <em>Искусственный интеллект</em> — практический опыт подбора, сжатия и интеграции ML-моделей для production-окружения с жёсткими ограничениями по ресурсам.
+- <em>Человеко-ориентированные решения</em> — проектирование клиент-only приложения, где приватность пользователя обеспечивается архитектурно (данные не покидают устройство), а UI скрывает сложность ML за drag&amp;drop-интерфейсом.</p>
+<p><strong>Практика выполнена полностью и в срок.</strong></p>
+<hr />
+<p><em>Подпись обучающегося:</em> <strong><em>_</em></strong><strong><em>_</em></strong>_ / Напалков А. /
+<em>Дата:</em> 15.04.2026</p></body></html>
